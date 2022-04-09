@@ -140,8 +140,6 @@ class Sticky(commands.Cog):
         if ctx.author.bot:
             return
         if not ctx.invoked_subcommand:
-            def check(msg: discord.Message):
-                return ctx.author == msg.author and ctx.channel == msg.channel
             embed = discord.Embed(timestamp=ctx.message.created_at, color=self.bot.main_color)
             try:
                 if ctx.message.reference:
