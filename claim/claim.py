@@ -24,7 +24,7 @@ class ClaimThread(commands.Cog):
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
     @commands.command()
-    async def claim(self, ctx):
+    async def claim(self, ctx, subscribe: bool = True):
         """Claim a thread"""
         thread = await self.db.find_one({'thread_id': str(ctx.thread.channel.id)})
         recipient_id = match_user_id(ctx.thread.channel.topic)
@@ -39,30 +39,67 @@ class ClaimThread(commands.Cog):
         embed.set_footer(
             text=f"{ctx.author.name}#{ctx.author.discriminator}", icon_url=ctx.author.avatar_url)
 
+        description = ""
+        if subscribe:
+            if str(ctx.thread.id) not in self.bot.config["subscriptions"]:
+                self.bot.config["subscriptions"][str(ctx.thread.id)] = []
+
+            mentions = self.bot.config["subscriptions"][str(ctx.thread.id)]
+
+            if ctx.author.mention in mentions:
+                mentions.remove(ctx.author.mention)
+                description += f"{ctx.author.mention} will __not__ be notified of any message now.\n"
+            else:
+                mentions.append(ctx.author.mention)
+                description += f"{ctx.author.mention} will now be notified of all messages received.\n"
+            await self.bot.config.update()
+
         if thread is None:
             await self.db.insert_one({'thread_id': str(ctx.thread.channel.id), 'claimers': [str(ctx.author.id)]})
             async with ctx.typing():
                 await recipient.send(embed=embed)
-            embed.description="Please respond to the case asap."
+            description += "Please respond to the case asap."
+            embed.description = description
             await ctx.reply(embed=embed)
         elif thread and len(thread['claimers']) == 0:
             await self.db.find_one_and_update({'thread_id': str(ctx.thread.channel.id)}, {'$addToSet': {'claimers': str(ctx.author.id)}})
             async with ctx.typing():
                 await recipient.send(embed=embed)
-            embed.description="Please respond to the case asap."
+            description += "Please respond to the case asap."
+            embed.description = description
             await ctx.reply(embed=embed)
         else:
-            await ctx.reply('Thread is already claimed')
+            description += "Thread is already claimed"
+            embed.description = description
+            await ctx.reply(embed=embed)
 
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
     @commands.command()
     async def unclaim(self, ctx):
         """Unclaim a thread"""
+        embed = discord.Embed(color=self.bot.main_color)
+        description = ""
         thread = await self.db.find_one({'thread_id': str(ctx.thread.channel.id)})
         if thread and str(ctx.author.id) in thread['claimers']:
             await self.db.find_one_and_update({'thread_id': str(ctx.thread.channel.id)}, {'$pull': {'claimers': str(ctx.author.id)}})
-            await ctx.send('Removed from claimers')
+            description += 'Removed from claimers.\n'
+
+        if str(ctx.thread.id) not in self.bot.config["subscriptions"]:
+            self.bot.config["subscriptions"][str(ctx.thread.id)] = []
+
+        mentions = self.bot.config["subscriptions"][str(ctx.thread.id)]
+
+        if ctx.author.mention in mentions:
+            mentions.remove(ctx.author.mention)
+            await self.bot.config.update()
+            description += f"{ctx.author.mention} is now unsubscribed from this thread."
+
+        if description == "":
+            description = "Nothing to do"
+
+        embed.description = description
+        await ctx.send(embed=embed)
 
     @checks.has_permissions(PermissionLevel.MODERATOR)
     @checks.thread_only()
