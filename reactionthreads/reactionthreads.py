@@ -43,7 +43,12 @@ class ReactionThreads(commands.Cog):
         self.task.cancel()
 
     async def send_menus(self, thread, creator, category, initial_message, config):
-        message = DummyMessage(copy.copy(initial_message))
+        if initial_message:
+            message = DummyMessage(copy.copy(initial_message))
+        else:
+            msg = await thread.channel.history(limit=1).flatten()
+            message = msg[0]
+
         message.author = self.bot.modmail_guild.me
         message.content = config['content']
         msgs, _ = await thread.reply(message)
@@ -220,8 +225,7 @@ class ReactionThreads(commands.Cog):
 
     @commands.Cog.listener()
     async def on_thread_ready(self, thread, creator, category, initial_message):
-        config = await self.db.find_one({'_id': 'reactionthreads'})
-        if config and config['enabled']:
+        if self.global_config['enabled']:
             await self.send_menus(thread, creator, category, initial_message, self.global_config)
 
     @checks.has_permissions(PermissionLevel.MOD)
