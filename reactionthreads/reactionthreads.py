@@ -98,7 +98,6 @@ class ReactionThreads(commands.Cog):
                         ctx.command.checks = old_checks
                         continue
             else:
-                await main_recipient_msg.delete()
                 await self.send_menus(thread, creator, category, initial_message, config)
 
     async def generate_menus(self, ctx, config):
