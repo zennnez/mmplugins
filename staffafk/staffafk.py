@@ -168,7 +168,7 @@ class StaffAFK(commands.Cog):
                 if self.bot.log_channel and msg != "":
                     await self.bot.log_channel.send(embed=await self.generate_embed(self, msg))
 
-        if hours == 7:
+        if hours == 6:
             if minutes == 0:
                 msg = ""
 
