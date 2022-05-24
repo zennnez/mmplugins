@@ -25,7 +25,7 @@ class ClaimThread(commands.Cog):
         cursor = self.db.find({'guild':str(ctx.guild.id)})
         count = 0
         async for x in cursor:
-            if str(claimer_id) in x['claimers']:
+            if 'claimers' in x and str(claimer_id) in x['claimers']:
                 count += 1
 
         config = await self.db.find_one({'_id': 'config'})
