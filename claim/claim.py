@@ -278,10 +278,11 @@ async def check_reply(ctx):
     if thread and len(thread['claimers']) != 0:
         in_role = False
         if config:= await ctx.bot.get_cog('ClaimThread').db.find_one({'_id': 'config'}):
-            roles = [ctx.guild.get_role(r) for r in config['bypass_roles'] if ctx.guild.get_role(r) is not None]
-            for role in roles:
-                if role in ctx.author.roles:
-                    in_role = True
+            if 'bypass_roles' in config:
+                roles = [ctx.guild.get_role(r) for r in config['bypass_roles'] if ctx.guild.get_role(r) is not None]
+                for role in roles:
+                    if role in ctx.author.roles:
+                        in_role = True
         return ctx.author.bot or in_role or str(ctx.author.id) in thread['claimers']
     return True
 
