@@ -60,7 +60,7 @@ class ReactionThreads(commands.Cog):
                 break
 
         for e in config.keys():
-            if e in ['enabled', 'content', '_id']:
+            if e in ['enabled', 'content', 'command', '_id']:
                     continue
             await main_recipient_msg.add_reaction(e)
             await asyncio.sleep(0.3)
@@ -72,8 +72,8 @@ class ReactionThreads(commands.Cog):
             await thread.reply(message)
         else:
             config = config[str(reaction.emoji)]
-            if len(config) == 1:
-                alias = config['content']
+            if len(config) == 2 or config['command'].lower() != 'none':
+                alias = config['command']
 
                 ctxs = []
                 if alias is not None:
@@ -97,7 +97,9 @@ class ReactionThreads(commands.Cog):
 
                         ctx.command.checks = old_checks
                         continue
-            else:
+
+            if len(config) != 2 or config['content'].lower() != 'none':
+                await main_recipient_msg.delete()
                 await self.send_menus(thread, creator, category, initial_message, config)
 
     async def generate_menus(self, ctx, config):
@@ -142,13 +144,24 @@ class ReactionThreads(commands.Cog):
                     embed=await self.generate_embed(
                         f'Sub Menu - {_+1}', (
                         f'Emoji: {emoji}\n\n'
-                        '**Send the message or command for this sub-menu option.**\n'
-                        'This can be an end-command, or a message for another sub-menu for this menu.\n'
+                        '**Send the menu-message** for this sub-menu option.\n'
+                        'Send __None__ if this is a end command emoji, and there is no message.\n'
                         )
                     )
                 )
                 m = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
-                config[emoji] = {'content':m.content}
+                await ctx.send(
+                    embed=await self.generate_embed(
+                        f'Sub Menu - {_+1}', (
+                        f'Emoji: {emoji}\n\n'
+                        '**Send the command** for this sub-menu option.\n'
+                        'Send __None__ if this is a sub-menu emoji, and no command is needed.\n'
+                        )
+                    )
+                )
+                c = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
+
+                config[emoji] = {'content':m.content, 'command':c.content}
 
             await ctx.send(
                 embed=await self.generate_embed(
@@ -160,7 +173,7 @@ class ReactionThreads(commands.Cog):
         else:
             i = 0
             for k, v in config.items():
-                if k in ['enabled', 'content', '_id']:
+                if k in ['enabled', 'content', 'command', '_id']:
                     continue
                 i += 1
 
@@ -170,8 +183,9 @@ class ReactionThreads(commands.Cog):
                         'How many sub-menu options are available for this menu?\n'
                         '**Main Menu:**\n'
                         f'Emoji: {k}\n'
-                        f"Message: {v['content']}\n\n"
-                        "**Note:** __Send '0' to end__, if no further sub-menus are required to this menu.\nThat is, when this is the end of this menu-tree, and **Message** (written above) is the command to be triggered on reaction."
+                        f"Message: {v['content']}\n"
+                        f"Command: {v['command']}\n\n"
+                        "**Note:** __Send '0' to end__, if no further sub-menus are required to this menu.\nThat is, when this is the end of this menu-tree.\n**Message** (written above) should be __None__ and **Command** should be the command to be triggered on reaction."
                         )
                     )
                 )
@@ -210,13 +224,26 @@ class ReactionThreads(commands.Cog):
                             f'**Main Menu - {i}:**\n'
                             f'Emoji: {k}\n'
                             f"Message: {v['content']}\n\n"
-                            '**Send the message or command for this sub-menu option.**\n'
-                            'This can be a command, or a message for another sub-menu for this menu.\n'
+                            '**Send the menu-message** for this sub-menu option.\n'
+                            'Send __None__ if this is a end command emoji, and there is no message.\n'
                             )
                         )
                     )
                     m = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
-                    v[emoji] = {'content':m.content}
+                    await ctx.send(
+                        embed=await self.generate_embed(
+                            f'Sub Menu - {_+1}', (
+                            f'Sub Menu Emoji: {emoji}\n\n'
+                            f'**Main Menu - {i}:**\n'
+                            f'Emoji: {k}\n'
+                            f"Message: {v['content']}\n\n"
+                            '**Send the command** for this sub-menu option.\n'
+                            'Send __None__ if this is a sub-menu emoji, and no command is needed.\n'
+                            )
+                        )
+                    )
+                    c = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
+                    v[emoji] = {'content':m.content, 'command':c.content}
 
                     await self.config_update()
                 await self.generate_menus(ctx, v)
