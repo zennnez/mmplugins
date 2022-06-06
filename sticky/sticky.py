@@ -125,7 +125,7 @@ class Sticky(commands.Cog):
 
                         content = sticky['msg']['content']
                         
-                        author = message.guild.get_member(sticky['author']) or await message.self.bot.fetch_user(sticky['author'])
+                        author = message.guild.get_member(sticky['author']) or await self.bot.fetch_user(sticky['author'])
                         msg = await self.send_sticky(channel, author, content, e, None)
                         await self.db.find_one_and_update(
                             {'guild_id':message.guild.id, 'channel_id':channel.id, 'msg_id':sticky['msg_id']},
