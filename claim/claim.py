@@ -22,18 +22,21 @@ class ClaimThread(commands.Cog):
         self.bot.get_command('freply').add_check(check_reply)
 
     async def check_claimer(self, ctx, claimer_id):
+        config = await self.db.find_one({'_id': 'config'})
+        if config and 'limit' in config:
+            if config['limit'] == 0:
+                return True
+        else:
+            raise commands.BadArgument(f"Set Limit first. `{ctx.prefix}claim limit`")
+
         cursor = self.db.find({'guild':str(ctx.guild.id)})
         count = 0
         async for x in cursor:
             if 'claimers' in x and str(claimer_id) in x['claimers']:
                 count += 1
 
-        config = await self.db.find_one({'_id': 'config'})
-        if config and 'limit' in config:
-            if count == config['limit']:
-                return False
-        else:
-            raise commands.BadArgument(f"Set Limit first. `{ctx.prefix}claim limit`")
+        if count == config['limit']:
+            return False
 
         return True
 
@@ -205,7 +208,10 @@ class ClaimThread(commands.Cog):
     @commands.guild_only()
     @claim_.command(name='limit')
     async def claim_limit_(self, ctx, limit: int):
-        """Set max threads a member can claim"""
+        """
+        Set max threads a member can claim
+        0 = No limit
+        """
         if await self.db.find_one({'_id': 'config'}):
             await self.db.find_one_and_update({'_id': 'config'}, {'$set': {'limit': limit}})
         else:
