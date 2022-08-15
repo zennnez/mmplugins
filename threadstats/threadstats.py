@@ -243,7 +243,7 @@ class ThreadStats(commands.Cog):
 
     @checks.has_permissions(PermissionLevel.ADMIN)
     @threadstats_.command(name='backlog')
-    async def threadstats_lifetime(self, ctx, counter: int):
+    async def threadstats_backlog(self, ctx, counter: int):
         """Set the backlog limit"""
         self.threads_backlog = counter
         await self._update_config()
