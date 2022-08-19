@@ -65,7 +65,17 @@ class TicketStats(commands.Cog):
         self.activity = config.get("activity", bool())
         self.status_group = config.get("msg", dict())
 
-        embed = discord.Embed(title='Tickets Stats', color=self.bot.main_color)
+        logs = self.bot.db.logs
+
+        if self.tickets_open == 0:
+            opened = await logs.find({"open": True}).to_list(None)
+            self.tickets_open == len(opened)
+
+        if self.tickets_lifetime == 0:
+            closed = await logs.find({"open": False}).to_list(None)
+            self.tickets_lifetime == len(closed)
+
+        embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
         embed.add_field(name='Open Tickets', value=self.tickets_open, inline=False)
         embed.add_field(name='Resolved - 24hrs', value=self.tickets_24hrs, inline=False)
         embed.add_field(name='Resolved - Lifetime', value=self.tickets_lifetime, inline=False)
@@ -100,7 +110,7 @@ class TicketStats(commands.Cog):
                     pass
 
         else:
-            update_channel: discord.Channel = await self.bot.guild.create_text_channel('Tickets Stats', topic='Tickets Stats', category=self.bot.main_category, overwrites={
+            update_channel: discord.Channel = await self.bot.guild.create_text_channel('Tickets Statistics', topic='Tickets Stats', category=self.bot.main_category, overwrites={
                 self.bot.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                 self.bot.guild.default_role: discord.PermissionOverwrite(read_messages=True, read_message_history=True, send_messages=False)
             })
@@ -192,7 +202,7 @@ class TicketStats(commands.Cog):
     @checks.has_permissions(PermissionLevel.ADMIN)
     @commands.group(name='ticketstats', invoke_without_command=True)
     async def ticketstats_(self, ctx):
-        """Manually adjust the thread status counter"""
+        """Manually adjust the ticket status counter"""
         if not ctx.invoked_subcommand:
             await ctx.send_help(ctx.command)
 
@@ -280,6 +290,22 @@ class TicketStats(commands.Cog):
         self.status_msg = list()
         self.task.cancel()
         self.task = self.bot.loop.create_task(self.cog_load())
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketstats_.command(name='restorecounter')
+    async def ticketstats_restorecounter(self, ctx):
+        """Reads the logs database and restores the __Open__ and __Lifetime Closed__ count from it"""
+
+        logs = self.bot.db.logs
+
+        opened = await logs.find({"open": True}).to_list(None)
+        self.tickets_open == len(opened)
+
+        closed = await logs.find({"open": False}).to_list(None)
+        self.tickets_lifetime == len(closed)
+
+        await self._update_config()
         await ctx.message.add_reaction('✅')
 
 def setup(bot):
