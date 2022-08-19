@@ -65,6 +65,16 @@ class ThreadStats(commands.Cog):
         self.activity = config.get("activity", bool())
         self.status_group = config.get("msg", dict())
 
+        logs = self.bot.db.logs
+
+        if self.tickets_open == 0:
+            opened = await logs.find({"open": True}).to_list(None)
+            self.tickets_open == len(opened)
+
+        if self.tickets_lifetime == 0:
+            closed = await logs.find({"open": False}).to_list(None)
+            self.tickets_lifetime == len(closed)
+
         embed = discord.Embed(title='Threads Stats', color=self.bot.main_color)
         embed.add_field(name='Open Threads', value=self.threads_open, inline=False)
         embed.add_field(name='Resolved - 24hrs', value=self.threads_24hrs, inline=False)
@@ -280,6 +290,22 @@ class ThreadStats(commands.Cog):
         self.status_msg = list()
         self.task.cancel()
         self.task = self.bot.loop.create_task(self.cog_load())
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @threadstats_.command(name='restorecounter')
+    async def threadstats_restorecounter(self, ctx):
+        """Reads the logs database and restores the __Open__ and __Lifetime Closed__ count from it"""
+
+        logs = self.bot.db.logs
+
+        opened = await logs.find({"open": True}).to_list(None)
+        self.tickets_open == len(opened)
+
+        closed = await logs.find({"open": False}).to_list(None)
+        self.tickets_lifetime == len(closed)
+
+        await self._update_config()
         await ctx.message.add_reaction('✅')
 
 def setup(bot):
