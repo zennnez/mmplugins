@@ -1,0 +1,191 @@
+# created for TheArxOfTheNel#4007 (discord)
+
+import discord
+from discord.ext import commands, tasks
+from core import checks
+from core.checks import PermissionLevel
+from core.paginator import EmbedPaginatorSession
+from typing import Union
+
+class Mentions(commands.Cog):
+    """Reply to role/member mentions with an embed message"""
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = self.bot.plugin_db.get_partition(self)
+        self.role_msg = dict()
+        self.enabled = bool()
+        self.task = self.bot.loop.create_task(self.cog_load())
+
+    async def cog_load(self):
+        config = await self.db.find_one({"_id": "config"})
+        if config is None:
+            await self.db.find_one_and_update({"_id": "config"},
+                {"$set": {
+                    "role_msg": dict(),
+                    "enabled": False}
+                }, upsert=True)
+
+            config = await self.db.find_one({"_id": "config"})
+
+        self.role_msg = config.get("role_msg", dict())
+        self.enabled = config.get("enabled", bool())
+
+    async def _update_config(self):
+        await self.db.find_one_and_update({"_id": "config"},
+            {"$set": {
+                "role_msg": self.role_msg,
+                "enabled": self.enabled}
+            }, upsert=True)
+
+    def cog_unload(self):
+        self.task.cancel()
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        author = message.author
+        if not isinstance(message.channel, discord.TextChannel):
+            return
+        if author.id == self.bot.user.id:
+            return
+        if author.bot:
+            return
+        if len(message.clean_content) == 0:
+            return
+        if not self.enabled:
+            return
+        if len(self.role_msg) == 0:
+            return
+
+        if message.role_mentions:
+            for role in message.role_mentions:
+                if str(role.id) in self.role_msg:
+                    await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(role.id)]))
+                    break
+            
+        elif message.mentions:
+            for member in message.mentions:
+                if str(member.id) in self.role_msg:
+                    await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(member.id)]))
+                    break
+        
+        elif message.reference:
+            message_reference = message.reference
+            if not (message_reference and message_reference.resolved and
+                    isinstance(message_reference.resolved, discord.Message)):
+                return
+            member = message_reference.resolved.author
+            if str(member.id) in self.role_msg:
+                return await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(member.id)]))
+
+            for role in member.roles:
+                if str(role.id) in self.role_msg:
+                    await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(role.id)]))
+                    break
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @commands.group(name='mentions', invoke_without_command=True)
+    async def mentions_(self, ctx):
+        """Mention commands"""
+        if not ctx.invoked_subcommand:
+            await ctx.send_help(ctx.command)
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.command(name='toggle')
+    async def mentions_toggle(self, ctx, yes_no: bool):
+        """Enable/Disable the plugin"""
+        self.enabled = yes_no
+        await self._update_config()
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.command(name='add')
+    async def mentions_add(self, ctx, role_member: Union[discord.Member, discord.Role], embed_message: discord.Message):
+        """
+        Add a reply to a role/member mention
+        `role_member` = a role or member
+        `embed_message` = a message with embed
+        """
+        if str(role_member.id) in self.role_msg:
+            await ctx.reply('Already in database')
+        else:
+            embeds = embed_message.embeds
+            if not embeds:
+                raise commands.BadArgument('That message has no embeds.')
+
+            embed = embed_message.embeds[0]
+            self.role_msg[str(role_member.id)] = embed.to_dict()
+            await self._update_config()
+            await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.command(name='remove')
+    async def mentions_remove(self, ctx, role_member: Union[discord.Member, discord.Role]):
+        """
+        Remove a role/member mention from database
+        `role_member` = a role or member
+        """
+        if str(role_member.id) in self.role_msg:
+            del self.role_msg[str(role_member.id)]
+            await self._update_config()
+            await ctx.message.add_reaction('✅')
+        else:
+            await ctx.reply('Not found on database!')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.command(name='list')
+    async def mentions_list(self, ctx):
+        """List all the current roles/members saved on database"""
+        embeds = [
+            discord.Embed(
+                title=f"Mention List",
+                color=self.bot.main_color,
+                description="",
+            )
+        ]
+        entries = 0
+        embed = embeds[0]
+        index = 0
+        try:
+            for k in self.role_msg:
+                hmm = ctx.guild.get_role(int(k)) or ctx.guild.get_member(int(k))
+                if not hmm:
+                    del self.role_msg[str(k)]
+                    await self._update_config()
+                    continue
+                index += 1
+                hm = f"{index}. {hmm}\n"
+                if entries == 20:
+                    embed = discord.Embed(
+                        title=f"Mention List (Continued)",
+                        color=self.bot.main_color,
+                        description=hm,
+                    )
+                    embeds.append(embed)
+                    entries = 1
+                else:
+                    embed.description += hm
+                    entries += 1
+
+            if len(embeds) > 1:
+                session = EmbedPaginatorSession(ctx, *embeds)
+                await session.run()
+            else:
+                embed=discord.Embed(title='No roles in db yet', color=self.bot.error_color)
+                await ctx.reply(embed=embed)
+        except Exception as e:
+            embed=discord.Embed(title='Failed', color=self.bot.error_color)
+            embed.set_footer(text=str(e))
+            await ctx.reply(embed=embed)
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.command(name='view')
+    async def mentions_view(self, ctx, role_member: Union[discord.Member, discord.Role]):
+        """View the embed response to a role/member mention"""
+        if str(role_member.id) in self.role_msg:
+            embed=discord.Embed.from_dict(self.role_msg[str(role_member.id)])
+            await ctx.send(embed=embed)
+        else:
+            await ctx.reply('Not found on database!')
+
+def setup(bot):
+    bot.add_cog(Mentions(bot))
