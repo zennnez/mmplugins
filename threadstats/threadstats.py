@@ -75,7 +75,7 @@ class ThreadStats(commands.Cog):
             closed = await logs.find({"open": False}).to_list(None)
             self.tickets_lifetime == len(closed)
 
-        embed = discord.Embed(title='Threads Stats', color=self.bot.main_color)
+        embed = discord.Embed(title='Threads Statistics', color=self.bot.main_color)
         embed.add_field(name='Open Threads', value=self.threads_open, inline=False)
         embed.add_field(name='Resolved - 24hrs', value=self.threads_24hrs, inline=False)
         embed.add_field(name='Resolved - Lifetime', value=self.threads_lifetime, inline=False)
@@ -110,7 +110,7 @@ class ThreadStats(commands.Cog):
                     pass
 
         else:
-            update_channel: discord.Channel = await self.bot.guild.create_text_channel('Threads Stats', topic='Threads Stats', category=self.bot.main_category, overwrites={
+            update_channel: discord.Channel = await self.bot.guild.create_text_channel('Threads Statistics', topic='Threads Stats', category=self.bot.main_category, overwrites={
                 self.bot.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                 self.bot.guild.default_role: discord.PermissionOverwrite(read_messages=True, read_message_history=True, send_messages=False)
             })
