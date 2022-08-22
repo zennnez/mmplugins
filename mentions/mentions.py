@@ -1,6 +1,7 @@
 # created for TheArxOfTheNel#4007 (discord)
 
 import discord
+import time
 from discord.ext import commands, tasks
 from core import checks
 from core.checks import PermissionLevel
@@ -14,6 +15,8 @@ class Mentions(commands.Cog):
         self.db = self.bot.plugin_db.get_partition(self)
         self.role_msg = dict()
         self.enabled = bool()
+        self.cooldown_ = dict()
+        self.cooldown = int()
         self.task = self.bot.loop.create_task(self.cog_load())
 
     async def cog_load(self):
@@ -22,19 +25,22 @@ class Mentions(commands.Cog):
             await self.db.find_one_and_update({"_id": "config"},
                 {"$set": {
                     "role_msg": dict(),
-                    "enabled": False}
+                    "enabled": False,
+                    "cooldown": int()}
                 }, upsert=True)
 
             config = await self.db.find_one({"_id": "config"})
 
         self.role_msg = config.get("role_msg", dict())
         self.enabled = config.get("enabled", bool())
+        self.cooldown = config.get("cooldown", int())
 
     async def _update_config(self):
         await self.db.find_one_and_update({"_id": "config"},
             {"$set": {
                 "role_msg": self.role_msg,
-                "enabled": self.enabled}
+                "enabled": self.enabled,
+                "cooldown": self.cooldown}
             }, upsert=True)
 
     def cog_unload(self):
@@ -43,6 +49,7 @@ class Mentions(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message):
         author = message.author
+        guild = message.guild
         if not isinstance(message.channel, discord.TextChannel):
             return
         if author.id == self.bot.user.id:
@@ -59,27 +66,66 @@ class Mentions(commands.Cog):
         if message.role_mentions:
             for role in message.role_mentions:
                 if str(role.id) in self.role_msg:
+                    cooldown = self.cooldown_.setdefault(guild.id, {}).get(
+                        role.id, 0
+                    )
+                    if (time.time() - cooldown) < self.cooldown:
+                        continue
+
                     await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(role.id)]))
+                    self.cooldown_[guild.id][role.id] = time.time()
                     break
             
         elif message.mentions:
             for member in message.mentions:
                 if str(member.id) in self.role_msg:
+                    cooldown = self.cooldown_.setdefault(guild.id, {}).get(
+                        member.id, 0
+                    )
+                    if (time.time() - cooldown) < self.cooldown:
+                        continue
+
                     await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(member.id)]))
+                    self.cooldown_[guild.id][member.id] = time.time()
                     break
-        
+
+                for role in member.roles:
+                    if str(role.id) in self.role_msg:
+                        cooldown = self.cooldown_.setdefault(guild.id, {}).get(
+                            member.id, 0
+                        )
+                        if (time.time() - cooldown) < self.cooldown:
+                            continue
+                        await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(role.id)]))
+                        self.cooldown_[guild.id][member.id] = time.time()
+                        break
+
         elif message.reference:
             message_reference = message.reference
             if not (message_reference and message_reference.resolved and
                     isinstance(message_reference.resolved, discord.Message)):
                 return
             member = message_reference.resolved.author
+
             if str(member.id) in self.role_msg:
-                return await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(member.id)]))
+                cooldown = self.cooldown_.setdefault(guild.id, {}).get(
+                    member.id, 0
+                )
+                if (time.time() - cooldown) < self.cooldown:
+                    return
+                await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(member.id)]))
+                self.cooldown_[guild.id][member.id] = time.time()
+                return
 
             for role in member.roles:
                 if str(role.id) in self.role_msg:
+                    cooldown = self.cooldown_.setdefault(guild.id, {}).get(
+                        member.id, 0
+                    )
+                    if (time.time() - cooldown) < self.cooldown:
+                        continue
                     await message.reply(embed=discord.Embed.from_dict(self.role_msg[str(role.id)]))
+                    self.cooldown_[guild.id][member.id] = time.time()
                     break
 
     @checks.has_permissions(PermissionLevel.ADMIN)
@@ -94,6 +140,14 @@ class Mentions(commands.Cog):
     async def mentions_toggle(self, ctx, yes_no: bool):
         """Enable/Disable the plugin"""
         self.enabled = yes_no
+        await self._update_config()
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.command(name='cooldown')
+    async def mentions_cooldown(self, ctx, seconds: int):
+        """Enable/Disable the plugin"""
+        self.cooldown = seconds
         await self._update_config()
         await ctx.message.add_reaction('✅')
 
