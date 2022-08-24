@@ -14,7 +14,10 @@ class Mentions(commands.Cog):
         self.bot = bot
         self.db = self.bot.plugin_db.get_partition(self)
         self.role_msg = dict()
+        self.ignore_ = list()
+        self.ignore = list()
         self.enabled = bool()
+        self.reference = bool()
         self.cooldown_ = dict()
         self.cooldown = int()
         self.task = self.bot.loop.create_task(self.cog_load())
@@ -26,21 +29,28 @@ class Mentions(commands.Cog):
                 {"$set": {
                     "role_msg": dict(),
                     "enabled": False,
-                    "cooldown": int()}
+                    "reference": False,
+                    "cooldown": int(),
+                    "ignore": []}
                 }, upsert=True)
 
             config = await self.db.find_one({"_id": "config"})
 
         self.role_msg = config.get("role_msg", dict())
         self.enabled = config.get("enabled", bool())
+        self.reference = config.get("reference", bool())
         self.cooldown = config.get("cooldown", int())
+        self.ignore_ = config.get("ignore", list())
+        self.ignore = [self.bot.guild.get_role(r) for r in self.ignore_ if self.bot.guild.get_role(r) is not None]
 
     async def _update_config(self):
         await self.db.find_one_and_update({"_id": "config"},
             {"$set": {
                 "role_msg": self.role_msg,
                 "enabled": self.enabled,
-                "cooldown": self.cooldown}
+                "reference": self.reference,
+                "cooldown": self.cooldown,
+                "ignore": self.ignore_}
             }, upsert=True)
 
     def cog_unload(self):
@@ -62,6 +72,10 @@ class Mentions(commands.Cog):
             return
         if len(self.role_msg) == 0:
             return
+
+        for r in author.roles:
+            if r in self.ignore:
+                return
 
         if message.role_mentions:
             for role in message.role_mentions:
@@ -100,7 +114,7 @@ class Mentions(commands.Cog):
                         self.cooldown_[guild.id][member.id] = time.time()
                         break
 
-        elif message.reference:
+        elif self.reference and message.reference:
             message_reference = message.reference
             if not (message_reference and message_reference.resolved and
                     isinstance(message_reference.resolved, discord.Message)):
@@ -186,6 +200,72 @@ class Mentions(commands.Cog):
             await ctx.reply('Not found on database!')
 
     @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.group(name='ignore', invoke_without_command=True)
+    async def mentions_ignore(self, ctx, role: discord.Role):
+        """Ignore these roles from mention replies"""
+        if not ctx.invoked_subcommand:
+            if role.id in self.ignore_:
+                self.ignore_.remove(role.id)
+                await self._update_config()
+                await ctx.send(f"Removed {role.name} from ignore list.")
+            else:
+                self.ignore_.append(role.id)
+                await self._update_config()
+                await ctx.send(f"Added {role.name} to ignore list.")
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_ignore.command(name='list')
+    async def mentions_ignore_list(self, ctx):
+        """List all the ignored roles saved on database"""
+        embeds = [
+            discord.Embed(
+                title=f"Ignored List",
+                color=self.bot.main_color,
+                description="",
+            )
+        ]
+        entries = 0
+        embed = embeds[0]
+        index = 0
+        try:
+            for hmm in self.ignore:
+                index += 1
+                hm = f"{index}. {hmm.name}\n"
+                if entries == 20:
+                    embed = discord.Embed(
+                        title=f"Ignored List (Continued)",
+                        color=self.bot.main_color,
+                        description=hm,
+                    )
+                    embeds.append(embed)
+                    entries = 1
+                else:
+                    embed.description += hm
+                    entries += 1
+
+            if len(embeds) > 0:
+                session = EmbedPaginatorSession(ctx, *embeds)
+                await session.run()
+            else:
+                embed=discord.Embed(title='No roles in db yet', color=self.bot.error_color)
+                await ctx.reply(embed=embed)
+        except Exception as e:
+            embed=discord.Embed(title='Failed', color=self.bot.error_color)
+            embed.set_footer(text=str(e))
+            await ctx.reply(embed=embed)
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @mentions_.command(name='replies')
+    async def mentions_replies(self, ctx, yes_no: bool):
+        """Enable/Disable the plugin for __replied messages__
+        i.e. If you set `{prefix}mentions replied no`: Plugin will work only for `@mentions`
+        If you set `{prefix}mentions replied yes`: Plugin will work for `@mentions` and `replied messages`
+        """
+        self.enabled = yes_no
+        await self._update_config()
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
     @mentions_.command(name='list')
     async def mentions_list(self, ctx):
         """List all the current roles/members saved on database"""
@@ -220,7 +300,7 @@ class Mentions(commands.Cog):
                     embed.description += hm
                     entries += 1
 
-            if len(embeds) > 1:
+            if len(embeds) > 0:
                 session = EmbedPaginatorSession(ctx, *embeds)
                 await session.run()
             else:
