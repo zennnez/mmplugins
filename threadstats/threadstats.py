@@ -67,13 +67,13 @@ class ThreadStats(commands.Cog):
 
         logs = self.bot.db.logs
 
-        if self.tickets_open == 0:
+        if self.threads_open == 0:
             opened = await logs.find({"open": True}).to_list(None)
-            self.tickets_open == len(opened)
+            self.threads_open = len(opened)
 
-        if self.tickets_lifetime == 0:
+        if self.threads_lifetime == 0:
             closed = await logs.find({"open": False}).to_list(None)
-            self.tickets_lifetime == len(closed)
+            self.threads_lifetime = len(closed)
 
         embed = discord.Embed(title='Threads Statistics', color=self.bot.main_color)
         embed.add_field(name='Open Threads', value=self.threads_open, inline=False)
@@ -82,10 +82,12 @@ class ThreadStats(commands.Cog):
         embed.description = await self.dm_status()
 
         if len(self.status_group) != 0:
+            dbok = False
             for k, v in self.status_group.items():
                 try:
                     update_channel = self.bot.guild.get_channel(int(k)) or await self.bot.fetch_channel(int(k))
                     if update_channel:
+                        dbok = True
                         if v:
                             status_msg = await update_channel.fetch_message(int(v))
                             self.status_msg.append(status_msg)
@@ -97,27 +99,32 @@ class ThreadStats(commands.Cog):
                 except:
                     pass
 
-            embed = self.status_msg[0].embeds[0]
-            embed.set_field_at(index=0, name='Open Threads', value=self.threads_open, inline=False)
-            embed.set_field_at(index=1, name='Resolved - 24hrs', value=self.threads_24hrs, inline=False)
-            embed.set_field_at(index=2, name='Resolved - Lifetime', value=self.threads_lifetime, inline=False)
-            embed.description = await self.dm_status()
+            if not dbok:
+                self.status_group = dict()
+                await self._update_config()
 
-            for m in self.status_msg:
-                try:
-                    await m.edit(embed=embed)
-                except:
-                    pass
+            if dbok and len(self.status_msg) != 0:
+                embed = self.status_msg[0].embeds[0]
+                embed.set_field_at(index=0, name='Open Threads', value=self.threads_open, inline=False)
+                embed.set_field_at(index=1, name='Resolved - 24hrs', value=self.threads_24hrs, inline=False)
+                embed.set_field_at(index=2, name='Resolved - Lifetime', value=self.threads_lifetime, inline=False)
+                embed.description = await self.dm_status()
 
-        else:
-            update_channel: discord.Channel = await self.bot.guild.create_text_channel('Threads Statistics', topic='Threads Stats', category=self.bot.main_category, overwrites={
+                for m in self.status_msg:
+                    try:
+                        await m.edit(embed=embed)
+                    except:
+                        pass
+
+        if len(self.status_group) == 0 or not dbok:
+            update_channel: discord.Channel = await self.bot.guild.create_text_channel('Threads Stats', topic='Threads Stats', category=self.bot.main_category, overwrites={
                 self.bot.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                 self.bot.guild.default_role: discord.PermissionOverwrite(read_messages=True, read_message_history=True, send_messages=False)
             })
 
             status_msg = await update_channel.send(embed=embed)
             self.status_msg.append(status_msg)
-            self.status_group = {str(update_channel.id):self.status_msg.id}
+            self.status_group = {str(update_channel.id):status_msg.id}
             await self._update_config()
 
         self.reset_daily.start()
@@ -300,12 +307,25 @@ class ThreadStats(commands.Cog):
         logs = self.bot.db.logs
 
         opened = await logs.find({"open": True}).to_list(None)
-        self.tickets_open == len(opened)
+        self.threads_open = len(opened)
 
         closed = await logs.find({"open": False}).to_list(None)
-        self.tickets_lifetime == len(closed)
+        self.threads_lifetime = len(closed)
 
         await self._update_config()
+        if len(self.status_msg) != 0:
+            embed = self.status_msg[0].embeds[0]
+            embed.set_field_at(index=0, name='Open Threads', value=self.threads_open, inline=False)
+            embed.set_field_at(index=1, name='Resolved - 24hrs', value=self.threads_24hrs, inline=False)
+            embed.set_field_at(index=2, name='Resolved - Lifetime', value=self.threads_lifetime, inline=False)
+            embed.description = await self.dm_status()
+
+            for m in self.status_msg:
+                try:
+                    await m.edit(embed=embed)
+                except:
+                    pass
+
         await ctx.message.add_reaction('✅')
 
 def setup(bot):
