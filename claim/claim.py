@@ -14,7 +14,7 @@ class ClaimThread(commands.Cog):
     """Allows supporters to claim thread by sending claim in the thread channel"""
     def __init__(self, bot):
         self.bot = bot
-        self.db = self.bot.plugin_db.get_partition(self)
+        self.db = bot.api.get_plugin_partition(self)
         check_reply.fail_msg = 'This thread has been claimed by another user.'
         self.bot.get_command('reply').add_check(check_reply)
         self.bot.get_command('areply').add_check(check_reply)
@@ -60,7 +60,7 @@ class ClaimThread(commands.Cog):
                 timestamp=ctx.message.created_at,
             )
             embed.set_footer(
-                text=f"{ctx.author.name}#{ctx.author.discriminator}", icon_url=ctx.author.avatar_url)
+                text=f"{ctx.author.name}#{ctx.author.discriminator}", icon_url=ctx.author.display_avatar.url)
 
             description = ""
             if subscribe:
@@ -293,5 +293,5 @@ async def check_reply(ctx):
     return True
 
 
-def setup(bot):
-    bot.add_cog(ClaimThread(bot))
+async def setup(bot):
+    await bot.add_cog(ClaimThread(bot))

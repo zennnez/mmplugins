@@ -21,7 +21,6 @@ class ThreadStats(commands.Cog):
         self.activity = bool()
         self.status_group = dict()
         self.status_msg = list()
-        self.task = self.bot.loop.create_task(self.cog_load())
 
     async def dm_status(self):
         if self.bot.config["dm_disabled"] == DMDisabled.ALL_THREADS:
@@ -127,7 +126,8 @@ class ThreadStats(commands.Cog):
             self.status_group = {str(update_channel.id):status_msg.id}
             await self._update_config()
 
-        self.reset_daily.start()
+        if not self.reset_daily.is_running():
+            self.reset_daily.start()
 
     async def _update_config(self):
         await self.db.find_one_and_update({"_id": "config"},
@@ -142,7 +142,6 @@ class ThreadStats(commands.Cog):
             }, upsert=True)
 
     def cog_unload(self):
-        self.task.cancel()
         self.reset_daily.cancel()
 
     @commands.Cog.listener()
@@ -295,8 +294,7 @@ class ThreadStats(commands.Cog):
             self.status_group[str(channel.id)] = None
         await self._update_config()
         self.status_msg = list()
-        self.task.cancel()
-        self.task = self.bot.loop.create_task(self.cog_load())
+        await self.cog_load()
         await ctx.message.add_reaction('✅')
 
     @checks.has_permissions(PermissionLevel.ADMIN)
@@ -328,5 +326,5 @@ class ThreadStats(commands.Cog):
 
         await ctx.message.add_reaction('✅')
 
-def setup(bot):
-    bot.add_cog(ThreadStats(bot))
+async def setup(bot):
+    await bot.add_cog(ThreadStats(bot))

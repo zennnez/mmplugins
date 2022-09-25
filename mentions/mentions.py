@@ -206,10 +206,14 @@ class Mentions(commands.Cog):
         if not ctx.invoked_subcommand:
             if role.id in self.ignore_:
                 self.ignore_.remove(role.id)
+                if role in self.ignore:
+                    self.ignore.remove(role)
                 await self._update_config()
                 await ctx.send(f"Removed {role.name} from ignore list.")
             else:
                 self.ignore_.append(role.id)
+                if role not in self.ignore:
+                    self.ignore.append(role)
                 await self._update_config()
                 await ctx.send(f"Added {role.name} to ignore list.")
 
@@ -261,7 +265,7 @@ class Mentions(commands.Cog):
         i.e. If you set `{prefix}mentions replied no`: Plugin will work only for `@mentions`
         If you set `{prefix}mentions replied yes`: Plugin will work for `@mentions` and `replied messages`
         """
-        self.enabled = yes_no
+        self.reference = yes_no
         await self._update_config()
         await ctx.message.add_reaction('✅')
 
@@ -321,5 +325,5 @@ class Mentions(commands.Cog):
         else:
             await ctx.reply('Not found on database!')
 
-def setup(bot):
-    bot.add_cog(Mentions(bot))
+async def setup(bot):
+    await bot.add_cog(Mentions(bot))

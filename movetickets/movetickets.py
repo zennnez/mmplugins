@@ -16,7 +16,6 @@ class MoveTickets(commands.Cog):
         self.categoryID = int()
         self.category = None
         self.enabled = bool()
-        self.task = self.bot.loop.create_task(self.cog_load())
 
     async def cog_load(self):
         config = await self.db.find_one({"_id": "config"})
@@ -40,9 +39,6 @@ class MoveTickets(commands.Cog):
                 "category": self.categoryID,
                 "enabled": self.enabled}
             }, upsert=True)
-
-    def cog_unload(self):
-        self.task.cancel()
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -106,5 +102,5 @@ class MoveTickets(commands.Cog):
         else:
             await ctx.reply('ID not set!')
 
-def setup(bot):
-    bot.add_cog(MoveTickets(bot))
+async def setup(bot):
+    await bot.add_cog(MoveTickets(bot))

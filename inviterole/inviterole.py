@@ -21,9 +21,8 @@ class InviteRole(commands.Cog):
         self.db = bot.api.get_plugin_partition(self)
         self._config_cache: Dict[str, Any] = {}
         self.invite_cache: Dict[int, Set[discord.Invite]] = {}
-        self.bot.loop.create_task(self.initialize())
 
-    async def initialize(self):
+    async def cog_load(self):
         await self.populate_config_cache()
         await self.populate_invite_cache()
 
@@ -186,5 +185,5 @@ class InviteRole(commands.Cog):
         await self.config_update()
         await self.remove_user_data(member)
 
-def setup(bot):
-    bot.add_cog(InviteRole(bot))
+async def setup(bot):
+    await bot.add_cog(InviteRole(bot))

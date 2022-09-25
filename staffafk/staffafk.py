@@ -65,7 +65,7 @@ class StaffAFK(commands.Cog):
             embed.add_field(name='Afk Message', value=config['afkmsg'], inline=False)
             embed.add_field(name='Online Ping', value=config['upping'], inline=False)
             embed.add_field(name='Afk Ping', value=config['afkping'], inline=False)
-            embed.add_field(name='Plugin Status', value='Enabled' if config['auto_enabled'] else 'Disabled', inline=False)
+            embed.add_field(name='Auto Change Status', value='Enabled' if config['auto_enabled'] else 'Disabled', inline=False)
             await ctx.send(embed=embed)
 
     @checks.has_permissions(PermissionLevel.MOD)
@@ -110,7 +110,7 @@ class StaffAFK(commands.Cog):
     @staffafk_settings.command(name='auto')
     async def staffafk_settings_auto_enabled(self, ctx):
         """
-        Enable or Disable the auto feature.
+        Enable or Disable the auto change status feature.
         """
         config = await self.db.find_one({"_id": "config"})
         await self.db.find_one_and_update({"_id": "config"}, {"$set": {"auto_enabled": not config['auto_enabled']}}, upsert=True)
@@ -133,12 +133,11 @@ class StaffAFK(commands.Cog):
             await ctx.send(embed=await self.generate_embed(self, f"Changed the Ping to:\n{config['upping']}\n\nChanged the Message to:\n{config['upmsg']}"))
 
     async def change_message(self, msg):
-        config = await self.db.find_one({"_id": "config"})
-        self.bot.config.set('thread_creation_response', msg)
+        await self.bot.config.set('thread_creation_response', msg)
         await self.bot.config.update()
 
     async def change_ping(self, ping):
-        self.bot.config.set('mention', ping)
+        await self.bot.config.set('mention', ping)
         await self.bot.config.update()
 
     @tasks.loop(seconds=60)
@@ -195,5 +194,5 @@ class StaffAFK(commands.Cog):
 
         return embed
 
-def setup(bot):
-    bot.add_cog(StaffAFK(bot))
+async def setup(bot):
+    await bot.add_cog(StaffAFK(bot))

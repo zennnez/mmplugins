@@ -31,7 +31,7 @@ class Sticky(commands.Cog):
                     content,
                     embed=embed,
                     files=attachments,
-                    avatar_url=author.avatar_url,
+                    avatar_url=author.display_avatar.url,
                     username=author.display_name,
                     allowed_mentions=self.allowed_mentions,
                     wait=True,
@@ -44,7 +44,7 @@ class Sticky(commands.Cog):
                 msg2 = await webhook.send(
                     content,
                     files=attachments,
-                    avatar_url=author.avatar_url,
+                    avatar_url=author.display_avatar.url,
                     username=author.display_name,
                     allowed_mentions=self.allowed_mentions,
                     wait=True,
@@ -312,5 +312,5 @@ class Sticky(commands.Cog):
         except commands.BadArgument:
             await ctx.send_help(ctx.command)
 
-def setup(bot):
-    bot.add_cog(Sticky(bot))
+async def setup(bot):
+    await bot.add_cog(Sticky(bot))
