@@ -399,7 +399,7 @@ class ReactionThreads(commands.Cog):
     async def reactionthreads_color(self, ctx, color: Optional[Literal["red", "blue", "grey", "green"]]):
         """
         Button colors of menu:
-        `red` / `blue` / `green` / 'grey'
+        `red` / `blue` / `green` / `grey`
         """
         if not color:
             return await ctx.send_help(ctx.command)
