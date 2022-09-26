@@ -21,6 +21,7 @@ class ReactionThreads(commands.Cog):
         "enabled": False,
         "mode": "reaction",
         "color": "grey",
+        "placeholder": "Choose an option...",
     }
     def __init__(self, bot):
         self.bot = bot
@@ -43,6 +44,10 @@ class ReactionThreads(commands.Cog):
 
         if 'color' not in self.global_config:
             self.global_config['color'] = 'grey'
+            up = True
+
+        if 'placeholder' not in self.global_config:
+            self.global_config['placeholder'] = 'Choose an option...'
             up = True
 
         if up:
@@ -88,18 +93,19 @@ class ReactionThreads(commands.Cog):
         view = discord.ui.View()
         options = []
         for e in config.keys():
-            if e in ['enabled', 'mode', 'color', 'content', 'command', '_id']:
+
+            if e in ['enabled', 'mode', 'placeholder', 'label', 'color', 'content', 'command', '_id']:
                     continue
+
+            if 'label' in config[e] and config[e]['label'].lower() != 'none':
+                label = config[e]['label']
+            else:
+                label = "\u200b"
+
             if self.global_config['mode'] == 'button':
-                view.add_item(discord.ui.Button(style=self.color, label="\u200b", custom_id=e, emoji=e))
+                view.add_item(discord.ui.Button(style=self.color, label=label, custom_id=e, emoji=e))
 
             elif self.global_config['mode'] == 'dropdown':
-                if config[e]['content'].lower() != 'none':
-                    label = config[e]['content']
-                elif config[e]['command'].lower() != 'none':
-                    label = "end"
-                else:
-                    label = "This does nothing!"
                 options.append(discord.SelectOption(label=label, emoji=e, value=e))
 
             elif self.global_config['mode'] == 'reaction':
@@ -110,7 +116,7 @@ class ReactionThreads(commands.Cog):
             view.add_item(
                 discord.ui.Select(
                     custom_id="reactionthreaddrop",
-                    placeholder='Choose an option...', min_values=1, max_values=1,
+                    placeholder=self.global_config['placeholder'] if 'placeholder' in self.global_config else "Choose an option...", min_values=1, max_values=1,
                         options = options
                     )
                 )
@@ -178,7 +184,7 @@ class ReactionThreads(commands.Cog):
         
             await ctx.send(
                 embed=await self.generate_embed(
-                    'Sub Menu Options', 'How many sub-menu options are available?'
+                    'Menu Options', 'How many options are available?'
                 )
             )
             m = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author and x.content.isdigit(), timeout=300)
@@ -187,7 +193,7 @@ class ReactionThreads(commands.Cog):
             for _ in range(menu):
                 await ctx.send(
                     embed=await self.generate_embed(
-                        f'Sub Menu - {_+1}', f"**Send an emoji for this sub-menu option.**"
+                        f'Option #{_+1}', f"**Send an emoji for this option.**"
                     )
                 )
                 while True:
@@ -206,26 +212,37 @@ class ReactionThreads(commands.Cog):
 
                 await ctx.send(
                     embed=await self.generate_embed(
-                        f'Sub Menu - {_+1}', (
+                        f'Option #{_+1} Label', (
                         f'Emoji: {emoji}\n\n'
-                        '**Send the menu-message** for this sub-menu option.\n'
-                        'Send __None__ if this is a end command emoji, and there is no message.\n'
+                        'Send the **label** for this option.\n'
+                        'This will be shown on dropdown option / button label.\n'
+                        )
+                    )
+                )
+                l = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
+
+                await ctx.send(
+                    embed=await self.generate_embed(
+                        f'Option #{_+1} Message', (
+                        f'Emoji: {emoji}\n\n'
+                        'Send the **message** for this option.\n'
+                        'Send __None__ if this is an end command, and there is no sub-menu for this emoji.\n'
                         )
                     )
                 )
                 m = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
                 await ctx.send(
                     embed=await self.generate_embed(
-                        f'Sub Menu - {_+1}', (
+                        f'Option #{_+1} Command', (
                         f'Emoji: {emoji}\n\n'
-                        '**Send the command** for this sub-menu option.\n'
-                        'Send __None__ if this is a sub-menu emoji, and no command is needed.\n'
+                        'Send the **command** for this option.\n'
+                        'Send __None__ if this emoji is for another sub-menu, and no command is needed.\n'
                         )
                     )
                 )
                 c = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
 
-                config[emoji] = {'content':m.content, 'command':c.content}
+                config[emoji] = {'content':m.content, 'label':l.content, 'command':c.content}
 
             await ctx.send(
                 embed=await self.generate_embed(
@@ -237,19 +254,19 @@ class ReactionThreads(commands.Cog):
         else:
             i = 0
             for k, v in config.items():
-                if k in ['enabled', 'mode', 'color', 'content', 'command', '_id']:
+                if k in ['enabled', 'mode', 'placeholder', 'label', 'color', 'content', 'command', '_id']:
                     continue
                 i += 1
 
                 await ctx.send(
                     embed=await self.generate_embed(
-                        f'Main Menu - {i}', (
-                        'How many sub-menu options are available for this menu?\n'
-                        '**Main Menu:**\n'
+                        f'Menu #{i}', (
+                        'How many options are available for this menu?\n'
+                        '**Main Menu details:**\n'
                         f'Emoji: {k}\n'
                         f"Message: {v['content']}\n"
                         f"Command: {v['command']}\n\n"
-                        "**Note:** __Send '0' to end__, if no further sub-menus are required to this menu.\nThat is, when this is the end of this menu-tree.\n**Message** (written above) should be __None__ and **Command** should be the command to be triggered on reaction."
+                        "**Note:** __Send '0' to end this menu tree__, if no further options/menus are required.\nBot will send the **Message** and trigger the **Command** on reaction/button tap/etc."
                         )
                     )
                 )
@@ -259,11 +276,24 @@ class ReactionThreads(commands.Cog):
                 for _ in range(menu):
                     await ctx.send(
                         embed=await self.generate_embed(
-                            f'Sub Menu - {_+1}', (
+                            f'Option #{_+1} Label', (
                             f'**Main Menu - {i}:**\n'
                             f'Emoji: {k}\n'
                             f"Message: {v['content']}\n\n"
-                            '**Send the emoji for this sub-menu option.**'
+                            'Send the **label** for this option.\n'
+                            'This will be shown on dropdown option / button label.\n'
+                            )
+                        )
+                    )
+                    l = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
+
+                    await ctx.send(
+                        embed=await self.generate_embed(
+                            f'Option #{_+1} Emoji', (
+                            f'**Main Menu - {i}:**\n'
+                            f'Emoji: {k}\n'
+                            f"Message: {v['content']}\n\n"
+                            'Send the **emoji** for this sub-menu option.'
                             )
                         )
                     )
@@ -283,31 +313,31 @@ class ReactionThreads(commands.Cog):
 
                     await ctx.send(
                         embed=await self.generate_embed(
-                            f'Sub Menu - {_+1}', (
-                            f'Sub Menu Emoji: {emoji}\n\n'
+                            f'Option #{_+1} Message', (
+                            f'Option Emoji: {emoji}\n\n'
                             f'**Main Menu - {i}:**\n'
                             f'Emoji: {k}\n'
                             f"Message: {v['content']}\n\n"
-                            '**Send the menu-message** for this sub-menu option.\n'
-                            'Send __None__ if this is a end command emoji, and there is no message.\n'
+                            'Send the **message** for this option.\n'
+                            'Send __None__ if this is an end command, and there is no message.\n'
                             )
                         )
                     )
                     m = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
                     await ctx.send(
                         embed=await self.generate_embed(
-                            f'Sub Menu - {_+1}', (
-                            f'Sub Menu Emoji: {emoji}\n\n'
+                            f'Option #{_+1} Command', (
+                            f'Option Emoji: {emoji}\n\n'
                             f'**Main Menu - {i}:**\n'
                             f'Emoji: {k}\n'
                             f"Message: {v['content']}\n\n"
-                            '**Send the command** for this sub-menu option.\n'
-                            'Send __None__ if this is a sub-menu emoji, and no command is needed.\n'
+                            'Send the **command** for this option.\n'
+                            'Send __None__ if no command is needed.\n'
                             )
                         )
                     )
                     c = await self.bot.wait_for('message', check=lambda x: ctx.message.channel == x.channel and ctx.message.author == x.author, timeout=300)
-                    v[emoji] = {'content':m.content, 'command':c.content}
+                    v[emoji] = {'content':m.content, 'label':l.content, 'command':c.content}
 
                     await self.config_update()
                 await self.generate_menus(ctx, v, False)
@@ -417,6 +447,21 @@ class ReactionThreads(commands.Cog):
         await ctx.send(
             embed=await self.generate_embed(
                 'Color', color
+            )
+        )
+
+    @checks.has_permissions(PermissionLevel.MOD)
+    @reactionthreads.command(name='placeholder')
+    async def reactionthreads_placeholder(self, ctx, *, placeholder: str):
+        """
+        The text which you see in dropdown menu
+        """
+        self.global_config['placeholder'] = placeholder
+        await self.config_update()
+
+        await ctx.send(
+            embed=await self.generate_embed(
+                'Placeholder', placeholder
             )
         )
 
