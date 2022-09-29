@@ -77,8 +77,7 @@ class ReactionThreads(commands.Cog):
         if initial_message:
             message = DummyMessage(copy.copy(initial_message))
         else:
-            msg = await thread.channel.history(limit=1).flatten()
-            message = msg[0]
+            message = [m async for m in thread.channel.history(limit=1)][0]
 
         message.author = self.bot.modmail_guild.me
         message.content = config['content']
