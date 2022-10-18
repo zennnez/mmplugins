@@ -115,5 +115,40 @@ class SnipCheck(commands.Cog):
         else:
             await ctx.reply(f"`{alias}` is not in enabled list")
 
+    @checks.has_permissions(PermissionLevel.MOD)
+    @snipcheck.command(name='view')
+    async def snipcheck_view(self, ctx: commands.Context, alias: str):
+        """View alias/snippets perm rules."""
+        if alias not in self.snips:
+            return await ctx.send("Alias/Snippet not in the list")
+
+        embeds = []
+        roles = []
+        members = []
+        not_found = []
+        for k in self.snips[alias]:
+            member = ctx.guild.get_member(k)
+            if member:
+               members.append(member) 
+            else:
+                role = ctx.guild.get_role(k)
+                if role:
+                    roles.append(role)
+                else:
+                    not_found.append(k)
+
+        embed = discord.Embed(color=self.bot.main_color)
+        embed.title = alias
+        if len(roles) != 0:
+            embed.add_field(name="**Roles:**", value=f"{', '.join(role.name for role in roles)}", inline=False)
+        
+        if len(members) != 0:
+            embed.add_field(name="Members", value=f"{', '.join(member.name for member in members)}", inline=False)
+
+        if len(not_found) != 0:
+            embed.add_field(name="Not found", value=f"{', '.join(k for k in not_found)}")
+
+        await ctx.send(embed=embed)
+
 async def setup(bot):
     await bot.add_cog(SnipCheck(bot))
