@@ -7,38 +7,68 @@ from core import checks
 from core.models import PermissionLevel
 
 class Status(discord.ui.View):
-    def __init__(self, context: commands.Context, message):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.context = context
-        self.user = context.author
-        self.message = message
 
     @discord.ui.button(label='Done', style=discord.ButtonStyle.green)
     async def done(self, b, i):
-        embed = self.message.embeds[0]
+        embed = i.message.embeds[0]
         if embed.title:
             embed.title = embed.title + ' (Completed)'
-        embed.add_field(name="Done by", value=f'{self.user.mention}', inline=True)
-        embed.color = self.context.bot.main_color
-        await self.message.edit(embed=embed, view=None)
+        embed.add_field(name="Done by", value=f'{i.author.mention}', inline=True)
+        embed.color = 0x69ff7a
+        await i.response.edit_message(embed=embed, view=None)
         self.stop()
 
     @discord.ui.button(label='Cancel', style=discord.ButtonStyle.red)
     async def cancel(self, b, i):
-        embed = self.message.embeds[0]
+        embed = i.message.embeds[0]
         if embed.title:
             embed.title = embed.title + ' (Cancelled)'
-        embed.add_field(name="Cancelled by", value=f'{self.user.mention}', inline=True)
-        embed.color = self.context.bot.error_color
-        await self.message.edit(embed=embed, view=None)
+        embed.add_field(name="Cancelled by", value=f'{i.author.mention}', inline=True)
+        embed.color = 0xff6969
+        await i.response.edit_message(embed=embed, view=None)
         self.stop()
 
 class Todo(commands.Cog):
     """
     Tasks/ToDo's
     """
+    default_global = {
+        "enabled": True,
+        "channel": None,
+    }
     def __init__(self, bot):
         self.bot = bot
+        self.db = bot.api.get_plugin_partition(self)
+        self.task = self.bot.loop.create_task(self.cog_load())
+        self.global_config = None
+        self.ch = None
+
+    async def cog_load(self):
+        self.global_config = await self.db.find_one({"_id": "todo"})
+        if self.global_config is None:
+            self.global_config = self.default_global
+            await self.config_update()
+            self.global_config = await self.db.find_one({"_id": "todo"})
+
+        if self.global_config['channel']:
+            try:
+                self.ch = await self.bot.fetch_channel(self.global_config['channel'])
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                pass
+
+    async def config_update(self):
+        await self.db.find_one_and_update(
+            {"_id": "todo"},
+            {"$set": self.global_config},
+            upsert=True,
+        )
+
+    def cog_unload(self):
+        self.task.cancel()
 
     @commands.group(aliases=["task"], invoke_without_command=True)
     @commands.guild_only()
@@ -109,13 +139,35 @@ class Todo(commands.Cog):
         else:
             embed.description = des.content
 
-        msg = await channel.send(embed=embed)
-        await msg.edit(view=Status(ctx, msg))
+        msg = await channel.send(embed=embed, view=Status())
         posted = discord.ui.Button(
             label="here",
             url=msg.jump_url,
             )
         await ctx.send('>>> **Posted**', components=posted)
+
+    @todo.command()
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    async def channel(self, ctx: commands.Context, channel: discord.TextChannel):
+        """
+        ToDo channel
+        """
+        self.global_config['channel'] = channel.id
+        self.ch = channel
+        await self.config_update()
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.MOD)
+    @todo.command()
+    async def toggle(self, ctx):
+        """Toggle ToDo no/off"""
+        self.global_config['enabled'] = not self.global_config['enabled']
+        await self.config_update()
+        await ctx.send(
+            embed=await self.generate_embed(
+                f"**Status:** {'Enabled' if self.global_config['enabled'] else 'Disabled'}"
+            )
+        )
 
     @staticmethod
     async def generate_embed(description: str):
@@ -124,6 +176,27 @@ class Todo(commands.Cog):
         embed.description = description
 
         return embed
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        author = message.author
+        if author.bot:
+            return
+
+        if message.type != discord.MessageType.default:
+            return
+
+        if not message.guild or not message.content:
+            return
+
+        if not self.global_config['enabled']:
+            return
+
+        if message.channel == self.ch:
+            embed = discord.Embed(colour = 0x2f3136)
+            embed.add_field(name="Created by", value=f'{author.mention}', inline=True)
+            embed.description = message.content
+            await message.channel.send(embed=embed, view=Status())
 
 async def setup(bot):
     await bot.add_cog(Todo(bot))
