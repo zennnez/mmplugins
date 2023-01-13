@@ -11,21 +11,21 @@ class Status(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(label='Done', style=discord.ButtonStyle.green)
-    async def done(self, b, i):
+    async def done(self, i, b):
         embed = i.message.embeds[0]
         if embed.title:
             embed.title = embed.title + ' (Completed)'
-        embed.add_field(name="Done by", value=f'{i.author.mention}', inline=True)
+        embed.add_field(name="Done by", value=f'{i.user.mention}', inline=True)
         embed.color = 0x69ff7a
         await i.response.edit_message(embed=embed, view=None)
         self.stop()
 
     @discord.ui.button(label='Cancel', style=discord.ButtonStyle.red)
-    async def cancel(self, b, i):
+    async def cancel(self, i, b):
         embed = i.message.embeds[0]
         if embed.title:
             embed.title = embed.title + ' (Cancelled)'
-        embed.add_field(name="Cancelled by", value=f'{i.author.mention}', inline=True)
+        embed.add_field(name="Cancelled by", value=f'{i.user.mention}', inline=True)
         embed.color = 0xff6969
         await i.response.edit_message(embed=embed, view=None)
         self.stop()
