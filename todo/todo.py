@@ -197,6 +197,7 @@ class Todo(commands.Cog):
             embed.add_field(name="Created by", value=f'{author.mention}', inline=True)
             embed.description = message.content
             await message.channel.send(embed=embed, view=Status())
+            await message.delete()
 
 async def setup(bot):
     await bot.add_cog(Todo(bot))
