@@ -1,15 +1,22 @@
 #taken from: https://github.com/phenom4n4n/phen-cogs/tree/master/lock
 
 from copy import copy
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union, Sequence
 
 import discord
 from discord.ext import commands
-from core.utils import humanize_list
+
 from core import checks
 from core.models import PermissionLevel
 
 from .converters import ChannelToggle, LockableChannel, LockableRole
+
+from babel.lists import format_list as babel_list
+
+def humanize_list(
+    items: Sequence[str], *, style: str = "standard"
+) -> str:
+    return babel_list(items, style=style)
 
 def get_audit_reason(author: discord.Member, reason: str = None, *, shorten: bool = False):
     """Construct a reason to appear in the audit log.
