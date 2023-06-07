@@ -680,5 +680,5 @@ class Lock(commands.Cog):
             invalid = ""
         return overwrite, valid_perms, invalid, not_allowed
 
-def setup(bot):
-    bot.add_cog(Lock(bot))
+async def setup(bot):
+    await bot.add_cog(Lock(bot))
