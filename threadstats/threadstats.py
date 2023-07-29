@@ -116,7 +116,7 @@ class ThreadStats(commands.Cog):
                         pass
 
         if len(self.status_group) == 0 or not dbok:
-            update_channel: discord.Channel = await self.bot.guild.create_text_channel('Threads Stats', topic='Threads Stats', category=self.bot.main_category, overwrites={
+            update_channel: discord.Channel = await self.bot.modmail_guild.create_text_channel('Threads Stats', topic='Threads Stats', category=self.bot.main_category, overwrites={
                 self.bot.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                 self.bot.guild.default_role: discord.PermissionOverwrite(read_messages=True, read_message_history=True, send_messages=False)
             })
