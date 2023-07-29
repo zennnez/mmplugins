@@ -15,6 +15,13 @@ class ImageSearch(commands.Cog):
             urls = [url]
             result = 'link'
 
+        elif ctx.message.reference:
+            reference = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            if reference and isinstance(reference, discord.Message):
+                if len(reference.attachments) > 0:
+                    urls = self.getMessageAttachmentURLs(reference)
+                    result = 'file'
+
         elif len(ctx.message.attachments) > 0:
             urls = self.getMessageAttachmentURLs(ctx.message)
             result = 'file'
@@ -77,37 +84,71 @@ class ImageSearch(commands.Cog):
     @checks.has_permissions(PermissionLevel.REGULAR)
     @commands.group(name="ris", invoke_without_command=True)
     async def ris(self, ctx):
+        """
+        Reverse Image Search
+        Usage: `{prefix}ris`
+        """
         if not ctx.invoked_subcommand:
             await ctx.send_help(ctx.command)
 
     @checks.has_permissions(PermissionLevel.REGULAR)
     @ris.command(name="all")
     async def risAll(self, ctx, *, url = None):
+        """
+        Reverse Image Search on all available platforms
+        Either provide a url or an image attachment or reply to a message containing image attachment
+        Usage: `{prefix}ris all <url>`
+        """
         await self.replyLinks(ctx, url, saucenao=True, google=True, tineye=True, iqdb=True, yandex=True)
 
     @checks.has_permissions(PermissionLevel.REGULAR)
     @ris.command(name="saucenao", aliases=["s"])
     async def risSauce(self, ctx, *, url = None):
+        """
+        Reverse Image Search on saucenao
+        Either provide a url or an image attachment or reply to a message containing image attachment
+        Usage: `{prefix}ris s <url>`
+        """
         await self.replyLinks(ctx, url, risnao=True)
 
     @checks.has_permissions(PermissionLevel.REGULAR)
     @ris.command(name="google", aliases=["g"])
     async def risGoogle(self, ctx, *, url = None):
+        """
+        Reverse Image Search on google
+        Either provide a url or an image attachment or reply to a message containing image attachment
+        Usage: `{prefix}ris g <url>`
+        """
         await self.replyLinks(ctx, url, google=True)
 
     @checks.has_permissions(PermissionLevel.REGULAR)
     @ris.command(name="tineye", aliases=["t"])
     async def risTineye(self, ctx, *, url = None):
+        """
+        Reverse Image Search on tineye
+        Either provide a url or an image attachment or reply to a message containing image attachment
+        Usage: `{prefix}ris t <url>`
+        """
         await self.replyLinks(ctx, url, tineye=True)
 
     @checks.has_permissions(PermissionLevel.REGULAR)
     @ris.command(name="iqdb", aliases=["i"])
     async def risIQDB(self, ctx, *, url = None):
+        """
+        Reverse Image Search on iqdb
+        Either provide a url or an image attachment or reply to a message containing image attachment
+        Usage: `{prefix}ris i <url>`
+        """
         await self.replyLinks(ctx, url, iqdb=True)
 
     @checks.has_permissions(PermissionLevel.REGULAR)
     @ris.command(name="yandex", aliases=["y"])
     async def risYandex(self, ctx, *, url = None):
+        """
+        Reverse Image Search on yandex
+        Either provide a url or an image attachment or reply to a message containing image attachment
+        Usage: `{prefix}ris y <url>`
+        """
         await self.replyLinks(ctx, url, yandex=True)
 
 async def setup(bot):
