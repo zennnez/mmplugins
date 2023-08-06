@@ -1,5 +1,7 @@
 # created for TheArxOfTheNel#4007, Minion_Kadin#2022 and Sasiko#1234 (discord)
+# updated with vc for gothikit
 
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from datetime import datetime
@@ -13,6 +15,13 @@ class TicketStats(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = self.bot.plugin_db.get_partition(self)
+
+        self.config = None
+        self.guild = self.bot.modmail_guild
+
+        self.stats_cat = None
+        self.vc = False
+        self.data = dict()
         self.tickets_backlog = int()
         self.tickets_open = int()
         self.tickets_24hrs = int()
@@ -26,158 +35,235 @@ class TicketStats(commands.Cog):
         if self.bot.config["dm_disabled"] == DMDisabled.ALL_THREADS:
             if self.activity:
                 await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"All DM's Disabled"))
-            return "Status: __**All Tickets Disabled**__"
+            return "All Tickets Disabled"
         elif self.bot.config["dm_disabled"] == DMDisabled.NEW_THREADS:
             if self.activity:
                 await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"New DM's Disabled"))
-            return "Status: __**New Tickets Disabled**__"
+            return "New Tickets Disabled"
         elif self.tickets_open > self.tickets_backlog:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"Backlogged (expect slow response)"))
-            return "Status: __**Backlogged!**__ (Expect slow response)"
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"Backlogged (Delayed Responses)"))
+            return "Backlogged (Delayed Responses)"
         else:
             if self.activity:
                 await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"Normal (accepting new DM's)"))
-            return "Status: __**Normal**__ (Accepting new tickets)"
+            return "Normal Responses (Accepting tickets)"
+
+    async def get_cat(self):
+        stats_cat = discord.utils.get(self.guild.categories, id=self.config.get("stats_cat", int()))
+        if not stats_cat:
+            stats_cat = await self.guild.create_category("Tickets Stats", overwrites={self.guild.default_role: discord.PermissionOverwrite(connect=False)}, reason='Ticket Stats Category')
+            self.config['stats_cat'] = stats_cat.id
+            await self._update_config()
+            await stats_cat.edit(position=1)
+
+        return stats_cat
+
+    async def get_logs(self):
+        logs = self.bot.db.logs
+        opened = await logs.find({"open": True}).to_list(None)
+        closed = await logs.find({"open": False}).to_list(None)
+
+        return len(opened), len(closed)
 
     async def cog_load(self):
-        config = await self.db.find_one({"_id": "config"})
-        if config is None:
-            await self.db.find_one_and_update({"_id": "config"},
-                {"$set": {
-                    "backlog": 5,
-                    "open": int(),
-                    "24hrs": int(),
-                    "lifetime": int(),
-                    "daily_reset": True,
-                    "activity": False,
-                    "msg": dict()}
-                }, upsert=True)
+        data = {
+            "stats_cat": int(),
+            "backlog": 5,
+            "open": int(),
+            "24hrs": int(),
+            "lifetime": int(),
+            "daily_reset": True,
+            "activity": False,
+            "vc": False,
+            "msg": dict()
+        }
 
-            config = await self.db.find_one({"_id": "config"})
+        self.config = await self.db.find_one({"_id": "config"})
+        if self.config is None:
+            await self.db.find_one_and_update({"_id": "config"}, {"$set": data}, upsert=True)
 
-        self.tickets_backlog = config.get("backlog", int())
-        self.tickets_open = config.get("open", int())
-        self.tickets_24hrs = config.get("24hrs", int())
-        self.tickets_lifetime = config.get("lifetime", int())
-        self.daily_reset = config.get("daily_reset", bool())
-        self.activity = config.get("activity", bool())
-        self.status_group = config.get("msg", dict())
+            self.config = await self.db.find_one({"_id": "config"})
 
-        logs = self.bot.db.logs
+        for k, v in data.items():
+            if k not in self.config:
+                self.config[k] = v
+            
+        self.tickets_backlog = self.config.get("backlog", int())
+        self.tickets_open = self.config.get("open", int())
+        self.tickets_24hrs = self.config.get("24hrs", int())
+        self.tickets_lifetime = self.config.get("lifetime", int())
 
-        if self.tickets_open == 0:
-            opened = await logs.find({"open": True}).to_list(None)
-            self.tickets_open = len(opened)
+        self.daily_reset = self.config.get("daily_reset", bool())
+        self.activity = self.config.get("activity", bool())
+        self.status_group = self.config.get("msg", dict())
+        self.vc = self.config.get("vc", bool())
+        self.stats_cat = await self.get_cat()
 
-        if self.tickets_lifetime == 0:
-            closed = await logs.find({"open": False}).to_list(None)
-            self.tickets_lifetime = len(closed)
+        self.tickets_open, self.tickets_lifetime = await self.get_logs()
 
-        embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
-        embed.add_field(name='Open Tickets', value=self.tickets_open, inline=False)
-        embed.add_field(name='Resolved - 24hrs', value=self.tickets_24hrs, inline=False)
-        embed.add_field(name='Resolved - Lifetime', value=self.tickets_lifetime, inline=False)
-        embed.description = await self.dm_status()
+        self.data = {
+            'Status': await self.dm_status(),
+            'Open Tickets': self.tickets_open,
+            'Resolved - Lifetime': self.tickets_lifetime,
+            'Resolved - Today': self.tickets_24hrs,
+        }
 
-        if len(self.status_group) != 0:
-            dbok = False
-            for k, v in self.status_group.items():
-                try:
-                    update_channel = self.bot.guild.get_channel(int(k)) or await self.bot.fetch_channel(int(k))
-                    if update_channel:
-                        dbok = True
-                        if v:
-                            status_msg = await update_channel.fetch_message(int(v))
-                            self.status_msg.append(status_msg)
-                        else:
-                            status_msg = await update_channel.send(embed=embed)
-                            self.status_msg.append(status_msg)
-                            self.status_group[str(update_channel.id)] = status_msg.id
-                            await self._update_config()
-                except:
-                    pass
-
-            if not dbok:
-                self.status_group = dict()
-                await self._update_config()
-
-            if dbok and len(self.status_msg) != 0:
-                embed = self.status_msg[0].embeds[0]
-                embed.set_field_at(index=0, name='Open Tickets', value=self.tickets_open, inline=False)
-                embed.set_field_at(index=1, name='Resolved - 24hrs', value=self.tickets_24hrs, inline=False)
-                embed.set_field_at(index=2, name='Resolved - Lifetime', value=self.tickets_lifetime, inline=False)
-                embed.description = await self.dm_status()
-
-                for m in self.status_msg:
-                    try:
-                        await m.edit(embed=embed)
-                    except:
-                        pass
-
-        if len(self.status_group) == 0 or not dbok:
-            update_channel: discord.Channel = await self.bot.modmail_guild.create_text_channel('Tickets Stats', topic='Tickets Stats', category=self.bot.main_category, overwrites={
-                self.bot.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                self.bot.guild.default_role: discord.PermissionOverwrite(read_messages=True, read_message_history=True, send_messages=False)
-            })
-
-            status_msg = await update_channel.send(embed=embed)
-            self.status_msg.append(status_msg)
-            self.status_group = {str(update_channel.id):status_msg.id}
-            await self._update_config()
-
-        if not self.reset_daily.is_running():
-            self.reset_daily.start()
+        await self.update_stats()
+        self.reset_daily.start()
 
     async def _update_config(self):
         await self.db.find_one_and_update({"_id": "config"},
             {"$set": {
-                "open": self.tickets_open,
+                "stats_cat": self.stats_cat.id if self.stats_cat else 0,
                 "backlog": self.tickets_backlog,
+                "open": self.tickets_open,
                 "24hrs": self.tickets_24hrs,
                 "lifetime": self.tickets_lifetime,
                 "daily_reset": self.daily_reset,
                 "activity": self.activity,
+                "vc": self.vc,
                 "msg": self.status_group}
             }, upsert=True)
 
     def cog_unload(self):
-        self.reset_daily.cancel()
+        if self.reset_daily:
+            self.reset_daily.cancel()
+
+    async def update_stats(self, data = None):
+        data = data or self.data
+        await self._update_config()
+
+        if self.vc:
+            for name, count in data.items():
+                channel = discord.utils.find(lambda c: c.name.startswith(name), self.guild.channels)
+                await asyncio.sleep(2)
+                if channel is None or not isinstance(channel, discord.VoiceChannel):
+                    await self.guild.create_voice_channel(name=f"{name}: {count}", category=self.stats_cat)
+                    continue
+                
+                await channel.edit(name=f"{name}: {count}")
+            
+            if len(self.status_group) != 0:
+                for k, v in self.status_group.items():
+                    update_channel = self.bot.guild.get_channel(int(k)) or await self.bot.fetch_channel(int(k))
+                    if update_channel:
+                        await update_channel.delete()
+                        await asyncio.sleep(1)
+                self.status_group = dict()
+                await self._update_config()
+
+        else:
+            for name, count in data.items():
+                channel = discord.utils.find(lambda c: c.name.startswith(name), self.guild.channels)
+                if isinstance(channel, discord.VoiceChannel):
+                    await channel.delete()
+                    await asyncio.sleep(1)
+
+            if len(self.status_msg) != 0 and self.status_msg[0].embeds and self.status_msg[0].embeds[0]:
+                embed = self.status_msg[0].embeds[0]
+                embed_dict = embed.to_dict()
+                for name, count in data.items():
+                    for field in embed_dict["fields"]:
+                        if field['name'] == name:
+                            field['value'] = count
+                            break
+
+                embed = discord.Embed.from_dict(embed_dict)
+                for m in self.status_msg:
+                    try:
+                        await m.edit(embed=embed)
+                        await asyncio.sleep(1)
+                    except:
+                        pass
+
+            else:
+                dbok = False
+                if len(self.status_group) != 0:
+                    for k, v in self.status_group.items():
+                        try:
+                            update_channel = self.bot.guild.get_channel(int(k)) or await self.bot.fetch_channel(int(k))
+                            if update_channel:
+                                dbok = True
+                                status_msg = await update_channel.fetch_message(int(v))
+                                if status_msg:
+                                    embed = status_msg[0].embeds[0]
+                                    embed_dict = embed.to_dict()
+                                    for name, count in data.items():
+                                        for field in embed_dict["fields"]:
+                                            if field['name'] == name:
+                                                field['value'] = count
+                                                break
+
+                                    embed = discord.Embed.from_dict(embed_dict)
+                                    await status_msg.edit(embed=embed)
+                                    await asyncio.sleep(1)
+                                    self.status_msg.append(status_msg)
+                                else:
+                                    embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
+                                    for name, count in data.items():
+                                        embed.add_field(name=name, value=count, inline=False)
+                                    status_msg = await update_channel.send(embed=embed)
+                                    await asyncio.sleep(1)
+                                    self.status_msg.append(status_msg)
+                                    self.status_group[str(update_channel.id)] = status_msg.id
+                                    await self._update_config()
+                        except:
+                            pass
+
+                if not dbok:
+                    self.status_group = dict()
+                    update_channel = await self.guild.create_text_channel('Tickets Stats', topic='Tickets Stats', category=self.stats_cat, overwrites={
+                        self.bot.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                        self.bot.guild.default_role: discord.PermissionOverwrite(read_messages=True, read_message_history=True, send_messages=False)
+                    })
+                    embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
+                    for name, count in data.items():
+                        embed.add_field(name=name, value=count, inline=False)
+                    status_msg = await update_channel.send(embed=embed)
+                    await asyncio.sleep(1)
+                    self.status_msg.append(status_msg)
+                    self.status_group = {str(update_channel.id):status_msg.id}
+                    await self._update_config()
 
     @commands.Cog.listener()
     async def on_command(self, ctx):
-        if ctx.command.qualified_name in ['close', 'disable new', 'disable all', 'enable'] and await ctx.command.can_run(ctx):
-            if ctx.command.qualified_name == 'close':
-                self.tickets_open = self.tickets_open-1
-                self.tickets_24hrs = self.tickets_24hrs+1
-                self.tickets_lifetime = self.tickets_lifetime+1
-                await self._update_config()
+        if ctx.command.qualified_name in ['disable new', 'disable all', 'enable'] and await ctx.command.can_run(ctx):
+            data = {
+                'Status': await self.dm_status(),
+            }
+            await self.update_stats(data)
 
-            embed = self.status_msg[0].embeds[0]
-            embed.set_field_at(index=0, name='Open Tickets', value=self.tickets_open, inline=False)
-            embed.set_field_at(index=1, name='Resolved - 24hrs', value=self.tickets_24hrs, inline=False)
-            embed.set_field_at(index=2, name='Resolved - Lifetime', value=self.tickets_lifetime, inline=False)
-            embed.description = await self.dm_status()
+    async def check_before_update(self, channel):
+        await asyncio.sleep(5)
+        if channel.guild != self.guild or await self.bot.api.get_log(channel.id) is None:
+            return False
 
-            for m in self.status_msg:
-                try:
-                    await m.edit(embed=embed)
-                except:
-                    pass
+        return True
 
     @commands.Cog.listener()
-    async def on_thread_ready(self, thread, creator, category, initial_message):
-        self.tickets_open = self.tickets_open+1
-        await self._update_config()
-        embed = self.status_msg[0].embeds[0]
-        embed.set_field_at(index=0, name='Open Tickets', value=self.tickets_open, inline=False)
-        embed.description = await self.dm_status()
+    async def on_guild_channel_create(self, channel):
+        if await self.check_before_update(channel):
+            self.tickets_open = self.tickets_open+1
+            data = {
+                'Status': await self.dm_status(),
+                'Open Tickets': self.tickets_open,
+            }
+            await self.update_stats(data)
 
-        for m in self.status_msg:
-            try:
-                await m.edit(embed=embed)
-            except:
-                pass
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel):
+        if await self.check_before_update(channel):
+            self.tickets_open = self.tickets_open-1
+            self.tickets_24hrs = self.tickets_24hrs+1
+            self.tickets_lifetime = self.tickets_lifetime+1
+            data = {
+                'Status': await self.dm_status(),
+                'Open Tickets': self.tickets_open,
+                'Resolved - Lifetime': self.tickets_lifetime,
+                'Resolved - Today': self.tickets_24hrs,
+            }
+            await self.update_stats(data)
 
     @tasks.loop(minutes=59)
     async def reset_daily(self):
@@ -186,13 +272,10 @@ class TicketStats(commands.Cog):
         if hours == 0 and self.daily_reset:
             self.tickets_24hrs = 0
 
-            embed = self.status_msg[0].embeds[0]
-            embed.set_field_at(index=1, name='Resolved - 24hrs', value='0', inline=False)
-            for m in self.status_msg:
-                try:
-                    await m.edit(embed=embed)
-                except:
-                    pass
+            data = {
+                'Resolved - Today': '0',
+            }
+            await self.update_stats(data)
 
             self.daily_reset = False
             await self._update_config()
@@ -218,13 +301,10 @@ class TicketStats(commands.Cog):
         """Manually adjust the open tickets counter"""
         self.tickets_open = counter
         await self._update_config()
-        embed = self.status_msg[0].embeds[0]
-        embed.set_field_at(index=0, name='Open Tickets', value=counter, inline=False)
-        for m in self.status_msg:
-            try:
-                await m.edit(embed=embed)
-            except:
-                pass
+        data = {
+            'Open Tickets': self.tickets_open,
+        }
+        await self.update_stats(data)
         await ctx.message.add_reaction('✅')
 
     @checks.has_permissions(PermissionLevel.ADMIN)
@@ -233,13 +313,10 @@ class TicketStats(commands.Cog):
         """Manually adjust the day's tickets counter"""
         self.tickets_24hrs = counter
         await self._update_config()
-        embed = self.status_msg[0].embeds[0]
-        embed.set_field_at(index=1, name='Resolved - 24hrs', value=counter, inline=False)
-        for m in self.status_msg:
-            try:
-                await m.edit(embed=embed)
-            except:
-                pass
+        data = {
+            'Resolved - Today': self.tickets_24hrs,
+        }
+        await self.update_stats(data)
         await ctx.message.add_reaction('✅')
 
     @checks.has_permissions(PermissionLevel.ADMIN)
@@ -248,13 +325,10 @@ class TicketStats(commands.Cog):
         """Manually adjust the lifetime tickets counter"""
         self.tickets_lifetime = counter
         await self._update_config()
-        embed = self.status_msg[0].embeds[0]
-        embed.set_field_at(index=2, name='Resolved - Lifetime', value=counter, inline=False)
-        for m in self.status_msg:
-            try:
-                await m.edit(embed=embed)
-            except:
-                pass
+        data = {
+            'Resolved - Lifetime': self.tickets_lifetime,
+        }
+        await self.update_stats(data)
         await ctx.message.add_reaction('✅')
 
     @checks.has_permissions(PermissionLevel.ADMIN)
@@ -263,13 +337,19 @@ class TicketStats(commands.Cog):
         """Set the backlog limit"""
         self.tickets_backlog = counter
         await self._update_config()
-        embed = self.status_msg[0].embeds[0]
-        embed.description = await self.dm_status()
-        for m in self.status_msg:
-            try:
-                await m.edit(embed=embed)
-            except:
-                pass
+        await self.update_stats()
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketstats_.command(name='vc')
+    async def ticketstats_vc(self, ctx, vc: bool):
+        """
+        Set the stats type
+        Set `True` for voice channels or set `False` for Stats Message
+        """
+        self.vc = vc
+        await self._update_config()
+        await self.update_stats()
         await ctx.message.add_reaction('✅')
 
     @checks.has_permissions(PermissionLevel.ADMIN)
@@ -302,28 +382,13 @@ class TicketStats(commands.Cog):
     async def ticketstats_restorecounter(self, ctx):
         """Reads the logs database and restores the __Open__ and __Lifetime Closed__ count from it"""
 
-        logs = self.bot.db.logs
-
-        opened = await logs.find({"open": True}).to_list(None)
-        self.tickets_open = len(opened)
-
-        closed = await logs.find({"open": False}).to_list(None)
-        self.tickets_lifetime = len(closed)
-
+        self.tickets_open, self.tickets_lifetime = await self.get_logs()
         await self._update_config()
-        if len(self.status_msg) != 0:
-            embed = self.status_msg[0].embeds[0]
-            embed.set_field_at(index=0, name='Open Tickets', value=self.tickets_open, inline=False)
-            embed.set_field_at(index=1, name='Resolved - 24hrs', value=self.tickets_24hrs, inline=False)
-            embed.set_field_at(index=2, name='Resolved - Lifetime', value=self.tickets_lifetime, inline=False)
-            embed.description = await self.dm_status()
-
-            for m in self.status_msg:
-                try:
-                    await m.edit(embed=embed)
-                except:
-                    pass
-
+        data = {
+            'Open Tickets': self.tickets_open,
+            'Resolved - Lifetime': self.tickets_lifetime,
+        }
+        await self.update_stats(data)
         await ctx.message.add_reaction('✅')
 
 async def setup(bot):
