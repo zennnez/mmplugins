@@ -30,24 +30,31 @@ class TicketStats(commands.Cog):
         self.activity = bool()
         self.status_group = dict()
         self.status_msg = list()
+        self.enabled = dict()
 
     async def dm_status(self):
         if self.bot.config["dm_disabled"] == DMDisabled.ALL_THREADS:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"All DM's Disabled"))
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"No Tickets"))
             return "All Tickets Disabled"
         elif self.bot.config["dm_disabled"] == DMDisabled.NEW_THREADS:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"New DM's Disabled"))
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Open Tickets Only"))
             return "New Tickets Disabled"
         elif self.tickets_open > self.tickets_backlog:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"Backlogged (Delayed Responses)"))
-            return "Backlogged (Delayed Responses)"
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Delayed Responses"))
+            return "Backlogged"
         else:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name=f"Normal (accepting new DM's)"))
-            return "Normal Responses (Accepting tickets)"
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Normal Responses"))
+            return "Normal"
+
+    async def nuke_channel(self, name):
+        channel = discord.utils.find(lambda c: c.name.startswith(name), self.guild.channels)
+        if isinstance(channel, discord.VoiceChannel) and channel.category == self.stats_cat:
+            await channel.delete()
+            await asyncio.sleep(1)
 
     async def get_cat(self):
         stats_cat = discord.utils.get(self.guild.categories, id=self.config.get("stats_cat", int()))
@@ -76,7 +83,13 @@ class TicketStats(commands.Cog):
             "daily_reset": True,
             "activity": False,
             "vc": False,
-            "msg": dict()
+            "msg": dict(),
+            "enabled": {
+                "Status": True,
+                "Open Tickets": True,
+                "Resolved - Lifetime": True,
+                "Resolved - Today": True,
+            },
         }
 
         self.config = await self.db.find_one({"_id": "config"})
@@ -99,6 +112,8 @@ class TicketStats(commands.Cog):
         self.status_group = self.config.get("msg", dict())
         self.vc = self.config.get("vc", bool())
         self.stats_cat = await self.get_cat()
+        self.enabled = self.config.get("enabled", dict())
+
 
         self.tickets_open, self.tickets_lifetime = await self.get_logs()
 
@@ -123,7 +138,8 @@ class TicketStats(commands.Cog):
                 "daily_reset": self.daily_reset,
                 "activity": self.activity,
                 "vc": self.vc,
-                "msg": self.status_group}
+                "msg": self.status_group,
+                "enabled": self.enabled}
             }, upsert=True)
 
     def cog_unload(self):
@@ -132,6 +148,7 @@ class TicketStats(commands.Cog):
 
     async def update_stats(self, data = None):
         data = data or self.data
+        data = {k:v for k,v in data.items() if self.enabled[k]}
         await self._update_config()
 
         if self.vc:
@@ -147,7 +164,7 @@ class TicketStats(commands.Cog):
             if len(self.status_group) != 0:
                 for k, v in self.status_group.items():
                     update_channel = self.bot.guild.get_channel(int(k)) or await self.bot.fetch_channel(int(k))
-                    if update_channel:
+                    if update_channel and update_channel.category == self.stats_cat:
                         await update_channel.delete()
                         await asyncio.sleep(1)
                 self.status_group = dict()
@@ -155,10 +172,7 @@ class TicketStats(commands.Cog):
 
         else:
             for name, count in data.items():
-                channel = discord.utils.find(lambda c: c.name.startswith(name), self.guild.channels)
-                if isinstance(channel, discord.VoiceChannel):
-                    await channel.delete()
-                    await asyncio.sleep(1)
+                await self.nuke_channel(name)
 
             if len(self.status_msg) != 0 and self.status_msg[0].embeds and self.status_msg[0].embeds[0]:
                 embed = self.status_msg[0].embeds[0]
@@ -375,6 +389,57 @@ class TicketStats(commands.Cog):
         await self._update_config()
         self.status_msg = list()
         await self.cog_load()
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketstats_.group(name='enable', invoke_without_command=True)
+    async def ticketstats_enable(self, ctx):
+        """Select the stats you want to enable"""
+        if not ctx.invoked_subcommand:
+            await ctx.send_help(ctx.command)
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketstats_enable.command(name='status')
+    async def ticketstats_enable_status(self, ctx, status: bool):
+        """Enable Tickets stats message"""
+        name = "Status"
+        self.enabled[name] = status
+        await self._update_config()
+        if not status:
+            await self.nuke_channel(name)
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketstats_enable.command(name='open')
+    async def ticketstats_enable_open(self, ctx, status: bool):
+        """Enable Open Tickets stats"""
+        name = "Open Tickets"
+        self.enabled[name] = status
+        await self._update_config()
+        if not status:
+            await self.nuke_channel(name)
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketstats_enable.command(name='lifetime')
+    async def ticketstats_enable_lifetime(self, ctx, status: bool):
+        """Enable Resolved - Lifetime stats"""
+        name = "Resolved - Lifetime"
+        self.enabled[name] = status
+        await self._update_config()
+        if not status:
+            await self.nuke_channel(name)
+        await ctx.message.add_reaction('✅')
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketstats_enable.command(name='today')
+    async def ticketstats_enable_today(self, ctx, status: bool):
+        """Enable Resolved - Today stats"""
+        name = "Resolved - Today"
+        self.enabled[name] = status
+        await self._update_config()
+        if not status:
+            await self.nuke_channel(name)
         await ctx.message.add_reaction('✅')
 
     @checks.has_permissions(PermissionLevel.ADMIN)
