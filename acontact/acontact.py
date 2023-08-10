@@ -107,9 +107,9 @@ class AContact(commands.Cog):
         for i in ctx.author.__slots__:
             setattr(creator, i, getattr(ctx.author, i))
 
-        setattr(creator, 'name', "Anonymous mod")
-        setattr(creator, 'mention', "Anonymous mod")
-        setattr(creator, 'id', "Anonymous")
+        setattr(creator, 'name', "Staff")
+        setattr(creator, 'mention', "Staff")
+        setattr(creator, 'id', "Staff")
         setattr(creator, 'discriminator', 0)
         setattr(creator, 'display_avatar', getattr(ctx.guild.me, 'display_avatar'))
 
