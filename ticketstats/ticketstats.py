@@ -7,8 +7,7 @@ from discord.ext import commands, tasks
 from datetime import datetime
 from pytz import timezone
 from core import checks
-from core.checks import PermissionLevel
-from core.models import DMDisabled
+from core.models import DMDisabled, PermissionLevel
 
 class TicketStats(commands.Cog):
     """Shows the current status of tickets"""
