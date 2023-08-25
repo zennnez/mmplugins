@@ -6,7 +6,7 @@ import discord
 from discord.ext import commands
 
 from core import checks
-from core.checks import PermissionLevel
+from core.models import PermissionLevel
 from core.utils import match_user_id
 
 
