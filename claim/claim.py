@@ -35,10 +35,7 @@ class ClaimThread(commands.Cog):
             if 'claimers' in x and str(claimer_id) in x['claimers']:
                 count += 1
 
-        if count == config['limit']:
-            return False
-
-        return True
+        return count < config['limit']
 
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
@@ -95,6 +92,22 @@ class ClaimThread(commands.Cog):
                 description += "Thread is already claimed"
                 embed.description = description
                 await ctx.reply(embed=embed)
+
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @commands.command()
+    async def claims(self, ctx):
+        """Check which channels you have clamined"""
+        cursor = self.db.find({'guild':str(ctx.guild.id)})
+        channels = []
+        async for x in cursor:
+            if 'claimers' in x and str(ctx.author.id) in x['claimers']:
+                channel = ctx.guild.get_channel(int(x['thread_id'])) or await self.bot.fetch_channel(int(x['thread_id']))
+                if channel and channel not in channels:
+                    channels.append(channel)
+
+        embed = discord.Embed(title='Your claimed tickets:', color=self.bot.main_color)
+        embed.description = ', '.join(ch.mention for ch in channels)
+        await ctx.send(embed=embed)
 
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
