@@ -112,12 +112,34 @@ class ClaimThread(commands.Cog):
         channels = []
         async for x in cursor:
             if 'claimers' in x and str(ctx.author.id) in x['claimers']:
-                channel = ctx.guild.get_channel(int(x['thread_id'])) or await self.bot.fetch_channel(int(x['thread_id']))
+                try:
+                    channel = ctx.guild.get_channel(int(x['thread_id'])) or await self.bot.fetch_channel(int(x['thread_id']))
+                except discord.NotFound:
+                    channel = None
+                    await self.db.delete_one({'thread_id': x['thread_id'], 'guild': x['guild']})
+
                 if channel and channel not in channels:
                     channels.append(channel)
 
         embed = discord.Embed(title='Your claimed tickets:', color=self.bot.main_color)
         embed.description = ', '.join(ch.mention for ch in channels)
+        await ctx.send(embed=embed)
+
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @claim_.command()
+    async def cleanup(self, ctx):
+        """Cleans up the database for deleted tickets"""
+        cursor = self.db.find({'guild':str(self.bot.modmail_guild.id)})
+        count = 0
+        async for x in cursor:
+            try:
+                channel = ctx.guild.get_channel(int(x['thread_id'])) or await self.bot.fetch_channel(int(x['thread_id']))
+            except discord.NotFound:
+                await self.db.delete_one({'thread_id': x['thread_id'], 'guild': x['guild']})
+                count += 1
+
+        embed = discord.Embed(color=self.bot.main_color)
+        embed.description = f"Cleaned up {count} closed tickets records"
         await ctx.send(embed=embed)
 
     @checks.has_permissions(PermissionLevel.SUPPORTER)
