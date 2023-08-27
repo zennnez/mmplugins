@@ -326,7 +326,7 @@ class ClaimThread(commands.Cog):
         await ctx.invoke(self.bot.get_command('reply'), msg=msg)
 
 async def check_reply(ctx):
-    thread = await ctx.bot.get_cog('ClaimThread').db.find_one({'thread_id': str(ctx.thread.channel.id), 'guild': str(self.bot.modmail_guild.id)})
+    thread = await ctx.bot.get_cog('ClaimThread').db.find_one({'thread_id': str(ctx.thread.channel.id), 'guild': str(ctx.bot.modmail_guild.id)})
     if thread and len(thread['claimers']) != 0:
         in_role = False
         if config:= await ctx.bot.get_cog('ClaimThread').db.find_one({'_id': 'config'}):
