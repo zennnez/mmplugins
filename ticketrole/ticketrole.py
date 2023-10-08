@@ -5,13 +5,45 @@ import discord
 from discord.ext import commands
 from core import checks
 from core.checks import PermissionLevel
-from typing import Sequence
+from typing import Sequence, Dict
 from babel.lists import format_list as babel_list
 
 def humanize_list(
     items: Sequence[str], *, style: str = "standard"
 ) -> str:
     return babel_list(items, style=style)
+
+class TicketRolesButtons(discord.ui.Button):
+    def __init__(self, roles: Dict, label, style, role: discord.Role, author: discord.Member):
+        self.roles = roles
+        self.role = role
+        self.author = author
+        super().__init__(label=label, style=style)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.role in self.author.roles:
+            await self.author.remove_roles(self.role)
+
+        else:
+            await self.author.add_roles(self.role)
+
+        view = TicketRolesView(self.roles, self.author)
+
+        await interaction.response.edit_message(view=view)
+
+class TicketRolesView(discord.ui.View):
+    def __init__(self, roles: Dict, author: discord.Member):
+        super().__init__(timeout=None)
+        self.author = author
+        self.roles = roles
+
+        for r in self.roles.values():
+            if r in self.author.roles:
+                style = discord.ButtonStyle.red
+            else:
+                style = discord.ButtonStyle.green
+
+            self.add_item(TicketRolesButtons(self.roles, r.name, style, r, self.author))
 
 class TicketRoles(commands.Cog):
     """Add custom roles to ticket author, within tickets"""
@@ -20,7 +52,6 @@ class TicketRoles(commands.Cog):
         self.db = self.bot.plugin_db.get_partition(self)
 
         self.config = None
-        self.guild = self.bot.modmail_guild
 
         self.roles = {}
         self.enabled = True
@@ -44,7 +75,7 @@ class TicketRoles(commands.Cog):
                 up = True
             
         roles = self.config.get("roles", True)
-        self.roles = {k: self.guild.get_role(k) for k in roles if self.guild.get_role(k)}
+        self.roles = {k: self.bot.guild.get_role(k) for k in roles if self.bot.guild.get_role(k)}
         self.enabled = self.config.get("enabled", True)
 
         if up:
@@ -65,7 +96,7 @@ class TicketRoles(commands.Cog):
     async def check_before_update(self, channel):
         await asyncio.sleep(0.5)
         log = await self.bot.api.get_log(channel.id)
-        if channel.guild != self.guild or not log:
+        if channel.guild != self.bot.modmail_guild or not log:
             return False, None
 
         return True, log
@@ -81,26 +112,14 @@ class TicketRoles(commands.Cog):
         await asyncio.sleep(2)
         ticket, log = await self.check_before_update(channel)
         if ticket:
-            author = self.guild.get_member(int(log['recipient']['id']))
-            buttons = []
-            for r in self.roles.values():
-                if r in author.roles:
-                    style = discord.ButtonStyle.red
-                else:
-                    style = discord.ButtonStyle.green
+            author = self.bot.guild.get_member(int(log['recipient']['id']))
 
-                buttons.append(
-                    discord.ui.Button(
-                        style=style,
-                        label=r.name,
-                        custom_id=f"ticketrole_{r.id}_{channel.id}",
-                    ),
-                )
+            view = TicketRolesView(self.roles, author)
 
             async for m in channel.history(limit=5, oldest_first=True):
                 if m.author == self.bot.user:
                     if m.embeds and m.embeds[0].fields and m.embeds[0].fields[0].name == "Roles":
-                        await m.edit(components=buttons)
+                        await m.edit(view=view)
                         break
 
     @checks.has_permissions(PermissionLevel.ADMIN)
@@ -150,55 +169,6 @@ class TicketRoles(commands.Cog):
         embed = discord.Embed(title="Ticket Roles Status", color=self.bot.main_color)
         embed.description = f"Enabled: **{self.enabled}**"
         await ctx.send(embed=embed)
-
-    @commands.Cog.listener()
-    async def on_button_click(self, inter: discord.MessageInteraction):
-        if not inter.component.custom_id.startswith('ticketrole'):
-            return
-
-        if not self.enabled:
-            return
-
-        if len(self.roles) == 0:
-            return
-
-        message = inter.message
-        customid, role_id, channel_id = inter.component.custom_id.split('_')
-
-        role_id = int(role_id)
-        channel_id = int(channel_id)
-
-        if role_id not in self.roles:
-            return inter.response.send_message("Role not found on saved database!")
-
-        role = self.roles[role_id]
-        log = await self.bot.api.get_log(channel_id)
-        if log:
-            author = self.guild.get_member(int(log['recipient']['id']))
-            if author:
-                buttons = []
-
-                if role in author.roles:
-                    await author.remove_roles(role)
-
-                else:
-                    await author.add_roles(role)
-
-                for r in self.roles.values():
-                    if r in author.roles:
-                        style = discord.ButtonStyle.red
-                    else:
-                        style = discord.ButtonStyle.green
-
-                    buttons.append(
-                        discord.ui.Button(
-                            style=style,
-                            label=r.name,
-                            custom_id=f"ticketrole_{r.id}_{channel_id}",
-                        ),
-                    )
-
-                await inter.response.edit_message(components=buttons)
 
 async def setup(bot):
     await bot.add_cog(TicketRoles(bot))
