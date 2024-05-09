@@ -38,15 +38,15 @@ class TicketStats(commands.Cog):
             return "All Tickets Disabled"
         elif self.bot.config["dm_disabled"] == DMDisabled.NEW_THREADS:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Open Tickets Only"))
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Open Tickets Only"), status=discord.Status.idle)
             return "New Tickets Disabled"
         elif self.tickets_open > self.tickets_backlog:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Delayed Responses"))
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Delayed Responses"), status=discord.Status.dnd)
             return "Backlogged"
         else:
             if self.activity:
-                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Normal Responses"))
+                await self.bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"Normal Responses"), status=discord.Status.online)
             return "Normal"
 
     async def nuke_channel(self, name):
