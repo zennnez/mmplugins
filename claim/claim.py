@@ -55,7 +55,7 @@ class ClaimThread(commands.Cog):
         """Claim a thread"""
         if not ctx.invoked_subcommand:
             if not await self.check_claimer(ctx, ctx.author.id):
-                return await ctx.reply(f"Limit reached, can't claim the thread.")
+                return await ctx.reply(f"Oh no! Someone has already claimed this thread. Please go onto the next thread.")
 
             thread = await self.db.find_one({'thread_id': str(ctx.thread.channel.id), 'guild': str(self.bot.modmail_guild.id)})
             recipient_id = match_user_id(ctx.thread.channel.topic)
@@ -64,7 +64,8 @@ class ClaimThread(commands.Cog):
             embed = discord.Embed(
                 color=self.bot.main_color,
                 title="Ticket Claimed",
-                description="Please wait as the assigned support agent reviews your case, you will receive a response shortly.",
+                mentions.append(ctx.author.mention)
+                description += f"{ctx.author.mention} Has claimed your ticket! Please wait while they review your case..\n",
                 timestamp=ctx.message.created_at,
             )
             embed.set_footer(
@@ -89,14 +90,14 @@ class ClaimThread(commands.Cog):
                 await self.db.insert_one({'thread_id': str(ctx.thread.channel.id), 'guild': str(self.bot.modmail_guild.id), 'claimers': [str(ctx.author.id)]})
                 async with ctx.typing():
                     await recipient.send(embed=embed)
-                description += "Please respond to the case asap."
+                description += "Please read the case and respond."
                 embed.description = description
                 await ctx.reply(embed=embed)
             elif thread and len(thread['claimers']) == 0:
                 await self.db.find_one_and_update({'thread_id': str(ctx.thread.channel.id), 'guild': str(self.bot.modmail_guild.id)}, {'$addToSet': {'claimers': str(ctx.author.id)}})
                 async with ctx.typing():
                     await recipient.send(embed=embed)
-                description += "Please respond to the case asap."
+                description += "Please read the case and respond."
                 embed.description = description
                 await ctx.reply(embed=embed)
             else:
@@ -201,7 +202,7 @@ class ClaimThread(commands.Cog):
             else:
                 await ctx.send(f'{member.name} is not in claimers')
         else:
-            await ctx.send(f'No one claimed this thread yet')
+            await ctx.send(f'Ticket not claimed.')
 
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
