@@ -138,7 +138,7 @@ class AutoTopSupporters(commands.Cog):
             self.msg = msg
             self.embed = msg.embeds[0]
             await self._update_config()
-            await ctx.message.add_reaction(ctx.bot.tick)
+            await ctx.reply(f"Channel {channel.mention} is set.")
             if self.date:
                 await self.update_supporters()
         else:
@@ -148,7 +148,7 @@ class AutoTopSupporters(commands.Cog):
             self.embed = None
             await self._update_config()
 
-            await ctx.reply("Disabled status embed message")
+            await ctx.reply("Disabled status embed message.")
 
     @checks.has_permissions(PermissionLevel.ADMIN)
     @tops_.command(name='time')
