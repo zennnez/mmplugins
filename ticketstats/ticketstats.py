@@ -56,6 +56,9 @@ class TicketStats(commands.Cog):
             await asyncio.sleep(1)
 
     async def get_cat(self):
+        if not self.vc:
+            return int()
+
         stats_cat = discord.utils.get(self.guild.categories, id=self.config.get("stats_cat", int()))
         if not stats_cat:
             stats_cat = await self.guild.create_category("Tickets Stats", overwrites={self.guild.default_role: discord.PermissionOverwrite(connect=False)}, reason='Ticket Stats Category')
@@ -173,6 +176,12 @@ class TicketStats(commands.Cog):
             for name, count in data.items():
                 await self.nuke_channel(name)
 
+            if self.stats_cat:
+                try:
+                    await self.stats_cat.delete()
+                except (discord.NotFound, AttributeError):
+                    pass
+
             if len(self.status_msg) != 0 and self.status_msg[0].embeds and self.status_msg[0].embeds[0]:
                 embed = self.status_msg[0].embeds[0]
                 embed_dict = embed.to_dict()
@@ -191,53 +200,47 @@ class TicketStats(commands.Cog):
                         pass
 
             else:
-                dbok = False
-                if len(self.status_group) != 0:
-                    for k, v in self.status_group.items():
-                        try:
-                            update_channel = self.bot.guild.get_channel(int(k)) or await self.bot.fetch_channel(int(k))
-                            if update_channel:
-                                dbok = True
-                                status_msg = await update_channel.fetch_message(int(v))
-                                if status_msg:
-                                    embed = status_msg[0].embeds[0]
-                                    embed_dict = embed.to_dict()
-                                    for name, count in data.items():
-                                        for field in embed_dict["fields"]:
-                                            if field['name'] == name:
-                                                field['value'] = count
-                                                break
+                if len(self.status_group) == 0:
+                    return f"Please use `{self.bot.prefix}ticketstats channel <yourchannel>` command to set stats channel/s."
 
-                                    embed = discord.Embed.from_dict(embed_dict)
-                                    await status_msg.edit(embed=embed)
-                                    await asyncio.sleep(1)
-                                    self.status_msg.append(status_msg)
-                                else:
-                                    embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
-                                    for name, count in data.items():
-                                        embed.add_field(name=name, value=count, inline=False)
-                                    status_msg = await update_channel.send(embed=embed)
-                                    await asyncio.sleep(1)
-                                    self.status_msg.append(status_msg)
-                                    self.status_group[str(update_channel.id)] = status_msg.id
-                                    await self._update_config()
-                        except:
-                            pass
+                to_delete = []
+                for k, v in self.status_group.items():
+                    try:
+                        update_channel = self.bot.guild.get_channel(int(k)) or await self.bot.fetch_channel(int(k))
+                        if not update_channel:
+                            to_delete.append(k)
+                            continue
 
-                if not dbok:
-                    self.status_group = dict()
-                    update_channel = await self.guild.create_text_channel('Tickets Stats', topic='Tickets Stats', category=self.stats_cat, overwrites={
-                        self.bot.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                        self.bot.guild.default_role: discord.PermissionOverwrite(read_messages=True, read_message_history=True, send_messages=False)
-                    })
-                    embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
-                    for name, count in data.items():
-                        embed.add_field(name=name, value=count, inline=False)
-                    status_msg = await update_channel.send(embed=embed)
-                    await asyncio.sleep(1)
-                    self.status_msg.append(status_msg)
-                    self.status_group = {str(update_channel.id):status_msg.id}
-                    await self._update_config()
+                        status_msg = await update_channel.fetch_message(int(v))
+                        if status_msg:
+                            embed = status_msg[0].embeds[0]
+                            embed_dict = embed.to_dict()
+                            for name, count in data.items():
+                                for field in embed_dict["fields"]:
+                                    if field['name'] == name:
+                                        field['value'] = count
+                                        break
+
+                            embed = discord.Embed.from_dict(embed_dict)
+                            await status_msg.edit(embed=embed)
+                            await asyncio.sleep(1)
+                            self.status_msg.append(status_msg)
+                        else:
+                            embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
+                            for name, count in data.items():
+                                embed.add_field(name=name, value=count, inline=False)
+                            status_msg = await update_channel.send(embed=embed)
+                            await asyncio.sleep(1)
+                            self.status_msg.append(status_msg)
+                            self.status_group[str(update_channel.id)] = status_msg.id
+                            await self._update_config()
+                    except:
+                        pass
+
+                if len(to_delete) != 0:
+                    for k in to_delete:
+                        del self.status_group[k]
+                        await self._update_config()
 
     @commands.Cog.listener()
     async def on_command(self, ctx):
@@ -355,12 +358,12 @@ class TicketStats(commands.Cog):
 
     @checks.has_permissions(PermissionLevel.ADMIN)
     @ticketstats_.command(name='vc')
-    async def ticketstats_vc(self, ctx, vc: bool):
+    async def ticketstats_vc(self, ctx, enable_disable: bool):
         """
         Set the stats type
         Set `True` for voice channels or set `False` for Stats Message
         """
-        self.vc = vc
+        self.vc = enable_disable
         await self._update_config()
         await self.update_stats()
         await ctx.message.add_reaction('✅')
@@ -382,13 +385,27 @@ class TicketStats(commands.Cog):
     async def ticketstats_channel(self, ctx, channel: discord.TextChannel):
         """Set More stats channels"""
         if str(channel.id) in self.status_group:
+            try:
+                status_msg = await channel.fetch_message(int(self.status_group[str(channel.id)]))
+                await status_msg.delete()
+            except (discord.NotFound, AttributeError):
+                pass
             del self.status_group[str(channel.id)]
+            status = f"Removed {channel.mention} from the list.\nTotal channels in the list: {len(self.status_group)}"
         else:
             self.status_group[str(channel.id)] = None
+            status = f"Added {channel.mention} to the list.\nTotal channels in the list: {len(self.status_group)}"
+            data = {k:v for k,v in self.data.items() if self.enabled[k]}
+            embed = discord.Embed(title='Tickets Statistics', color=self.bot.main_color)
+            for name, count in data.items():
+                embed.add_field(name=name, value=count, inline=False)
+            status_msg = await channel.send(embed=embed)
+            await asyncio.sleep(1)
+            self.status_msg.append(status_msg)
+            self.status_group[str(channel.id)] = status_msg.id
+
         await self._update_config()
-        self.status_msg = list()
-        await self.cog_load()
-        await ctx.message.add_reaction('✅')
+        await ctx.reply(status)
 
     @checks.has_permissions(PermissionLevel.ADMIN)
     @ticketstats_.group(name='enable', invoke_without_command=True)
