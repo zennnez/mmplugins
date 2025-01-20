@@ -55,14 +55,14 @@ class TStatusEmbed(commands.Cog):
             return
 
         if self.msg:
-            if self.embed.description == "No records yet":
+            if self.embed.description == "No records yet" and status != "Closed":
                 self.embed.description = f"\n{channel.mention}: *{status}*"
             elif status == "Closed":
                 tickets = self.embed.description.split("\n")
                 new_desc = str()
                 for k in tickets:
                     if channel.mention not in k:
-                        new_desc += k
+                        new_desc += f"\n{k}"
 
                 if not new_desc:
                     new_desc = "No records yet"
