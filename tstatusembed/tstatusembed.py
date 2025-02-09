@@ -100,7 +100,7 @@ class TStatusEmbed(commands.Cog):
             thread = await self.bot.threads.find(recipient=recipient)
 
         else:
-            status = "Awaiting Member's Reply"
+            status = "Awaiting Staff's Reply"
             thread = await self.bot.threads.find(channel=channel)
 
         if not thread:
