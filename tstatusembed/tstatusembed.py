@@ -36,9 +36,18 @@ class TStatusEmbed(commands.Cog):
                 self.config[k] = v
             
         if self.config.get("channel", None):
-            self.channel = self.guild.get_channel(int(self.config.get("channel", None))) or await self.guild.fetch_channel(int(self.config.get("channel", None)))
-            self.msg = await self.channel.fetch_message(int(self.config.get("msg", None)))
-            self.embed = self.msg.embeds[0]
+            try:
+                self.channel = self.guild.get_channel(int(self.config.get("channel", None))) or await self.guild.fetch_channel(int(self.config.get("channel", None)))
+            except:
+                pass
+
+            try:
+                self.msg = await self.channel.fetch_message(int(self.config.get("msg", None)))
+            except:
+                pass
+
+            if self.msg:
+                self.embed = self.msg.embeds[0]
 
     async def _update_config(self):
         await self.db.find_one_and_update({"_id": "config"},
