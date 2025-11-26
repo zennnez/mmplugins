@@ -1,0 +1,3 @@
+ffmpeg==1.4
+opuslib==3.0.1
+pynacl==1.6.1
