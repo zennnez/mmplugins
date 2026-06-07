@@ -134,6 +134,8 @@ class TicketAllot(commands.Cog):
 
         self.assignments: Dict[str, dict] = {}
 
+        self._reminder_msg_cache: Dict[str, discord.Message] = {}
+
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
     async def cog_load(self) -> None:
@@ -425,7 +427,7 @@ class TicketAllot(commands.Cog):
         embed.set_footer(text=" • ".join(footer_parts))
 
         try:
-            await channel.send(embed=embed)
+            await channel.send(content=member.mention, embed=embed)
         except discord.HTTPException:
             pass
 
@@ -459,6 +461,7 @@ class TicketAllot(commands.Cog):
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         """Auto-complete when a modmail thread channel is deleted."""
         cid = str(channel.id)
+        self._reminder_msg_cache.pop(cid, None)
         if cid in self.assignments and not self.assignments[cid].get("completed"):
             self.assignments[cid]["completed"]    = True
             self.assignments[cid]["completed_at"] = utcnow().isoformat()
@@ -703,7 +706,6 @@ class TicketAllot(commands.Cog):
             member  = self.bot.modmail_guild.get_member(int(mid))
             if channel and member:
                 assigned = ensure_utc(datetime.fromisoformat(a["assigned_at"]))
-                elapsed_total = (now - assigned).total_seconds()
 
                 if not in_ping:
                     # First reminder — enter spam phase
@@ -735,8 +737,19 @@ class TicketAllot(commands.Cog):
                 embed.set_footer(
                     text=f"Repeat: {repeat_m}m • Ping interval: {ping_m}m"
                 )
+
+                old_msg = self._reminder_msg_cache.get(cid)
+                if old_msg is not None:
+                    try:
+                        await old_msg.delete()
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        pass
+
+                    self._reminder_msg_cache.pop(cid, None)
+
                 try:
-                    await channel.send(content=member.mention, embed=embed)
+                    sent = await channel.send(content=member.mention, embed=embed)
+                    self._reminder_msg_cache[cid] = sent
                 except discord.HTTPException:
                     pass
 
@@ -966,7 +979,7 @@ class TicketAllot(commands.Cog):
         ─────────────────────────────────────────────────
         **📂 Category Routing  (Mod)**
         ─────────────────────────────────────────────────
-        `{prefix}ta category [#category]`     Set / clear your ticket category
+        `{prefix}ta category [#category] [@member]`  Set / clear ticket category (Admin for others)
 
         ─────────────────────────────────────────────────
         **⏰ Reminders  (Admin config / Mod stop)**
@@ -981,7 +994,7 @@ class TicketAllot(commands.Cog):
         ─────────────────────────────────────────────────
         **📋 Ticket Actions  (Mod)**
         ─────────────────────────────────────────────────
-        `{prefix}ta assign #channel @member`   Manual assignment
+        `{prefix}ta assign @member [#channel]`   Manual assignment (channel defaults to current)
         `{prefix}ta complete [#channel]`       Mark ticket complete
         `{prefix}ta dashboard [mod]`           Paginated dashboard
         `{prefix}ta rolecheck`                 Live ratio snapshot
@@ -1209,12 +1222,12 @@ class TicketAllot(commands.Cog):
 
     @checks.has_permissions(PermissionLevel.MOD)
     @ticketallot_.command(name="category", aliases=["cat"])
-    async def ta_category(self, ctx, category: discord.CategoryChannel = None, member: discord.Member = None):
+    async def ta_category(self, ctx, category: discord.CategoryChannel = None):
         """
-        Set (or clear) your preferred Discord category for tickets assigned to you.
+        Set or clear your ticket category.
 
-        When a ticket is assigned to you it is automatically moved into this
-        category and the assignment embed shows where it was moved.
+        When a ticket is assigned to you its channel is automatically moved
+        into this category and the assignment embed shows where it was moved.
 
         Omit `category` to clear your current setting.
 
@@ -1222,8 +1235,34 @@ class TicketAllot(commands.Cog):
         `{prefix}ta category "My Tickets"`   — set your category
         `{prefix}ta category`                 — clear your category
         """
-        if member is None:
-            member = ctx.author
+        mid = str(ctx.author.id)
+
+        if category is None:
+            if mid in self.member_categories:
+                del self.member_categories[mid]
+                await self._save()
+                return await ctx.send("✅ Your ticket category has been cleared.")
+            return await ctx.send(
+                f"ℹ️ You don't have a ticket category set.\n"
+                f"Use `{ctx.prefix}ta category <category_name>` to set one."
+            )
+
+        self.member_categories[mid] = category.id
+        await self._save()
+        await ctx.send(
+            f"✅ Your tickets will be moved to **{category.name}** on assignment."
+        )
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketallot_.command(name="categoryfor", aliases=["catfor"])
+    async def ta_category_for(self, ctx, member: discord.Member, category: discord.CategoryChannel = None):
+        """
+        Set or clear the ticket category for **another** staff member.
+        Omit `category` to clear their setting.
+        **Examples:**
+        `{prefix}ta categoryfor @StaffMember "Senior Queue"`  — set category
+        `{prefix}ta categoryfor @StaffMember`                  — clear category
+        """
         mid = str(member.id)
         if category is None:
             if mid in self.member_categories:
@@ -1422,16 +1461,20 @@ class TicketAllot(commands.Cog):
 
     @checks.has_permissions(PermissionLevel.MOD)
     @ticketallot_.command(name="assign")
-    async def ta_assign(self, ctx, channel: discord.TextChannel, member: discord.Member):
+    async def ta_assign(self, ctx, member: discord.Member, channel: discord.TextChannel = None):
         """
-        Manually assign a ticket channel to a specific staff member.
+        Manually assign a ticket to a specific staff member.
 
+        `channel` defaults to the current channel if not specified.
         Deadline tracking, escalation and reminders apply exactly as for
         automatic assignments.  The member's allotment role is inferred from
         the highest-ratio configured role they belong to.
 
-        **Example:** `{prefix}ta assign #username-1234 @StaffMember`
+        **Examples:**
+        `{prefix}ta assign @StaffMember`                — assign current channel
+        `{prefix}ta assign @StaffMember #ticket-name`   — assign a specific channel
         """
+        channel = channel or ctx.channel
         # Infer role
         role_id:    int = 0
         best_ratio: float = -1.0
@@ -1482,6 +1525,7 @@ class TicketAllot(commands.Cog):
         self.assignments[cid]["completed_at"]     = now.isoformat()
         self.assignments[cid]["in_ping_mode"]     = False  # silence reminders
         self.assignments[cid]["last_reminder_at"] = now.isoformat()
+        self._reminder_msg_cache.pop(cid, None)
         await self._save()
 
         member = self.bot.modmail_guild.get_member(self.assignments[cid]["member_id"])
