@@ -31,15 +31,17 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import discord
 from discord.ext import commands, tasks
 
 from core import checks
-from core.models import PermissionLevel
+from core.models import PermissionLevel, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.time import Time, human_timedelta
+
+logger = getLogger(__name__)
 
 
 # ─── Local helpers ────────────────────────────────────────────────────────────
@@ -136,6 +138,39 @@ class TicketAllot(commands.Cog):
 
         self._reminder_msg_cache: Dict[str, discord.Message] = {}
 
+    # ─── Reminder cache helper ────────────────────────────────────────────────
+
+    async def _delete_cached_reminder(self, cid: str, *, reason: str = "") -> None:
+        """
+        Delete the cached reminder message for *cid* (if any) and remove it
+        from the cache. Safe to call even if nothing is cached.
+        """
+        old_msg = self._reminder_msg_cache.pop(cid, None)
+        if old_msg is None:
+            logger.debug("ticketallot: no cached reminder message for %s (%s)", cid, reason)
+            return
+        try:
+            await old_msg.delete()
+            logger.info(
+                "ticketallot: deleted reminder message %s in channel %s (%s)",
+                old_msg.id, cid, reason,
+            )
+        except discord.NotFound:
+            logger.debug(
+                "ticketallot: reminder message %s in channel %s already deleted (%s)",
+                old_msg.id, cid, reason,
+            )
+        except discord.Forbidden:
+            logger.warning(
+                "ticketallot: missing permission to delete reminder message %s in channel %s (%s)",
+                old_msg.id, cid, reason,
+            )
+        except discord.HTTPException as e:
+            logger.warning(
+                "ticketallot: failed to delete reminder message %s in channel %s (%s): %s",
+                old_msg.id, cid, reason, e,
+            )
+
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
     async def cog_load(self) -> None:
@@ -174,9 +209,19 @@ class TicketAllot(commands.Cog):
         self.deadline_check_loop.start()
         self.reminder_loop.start()
 
+        logger.info(
+            "ticketallot: loaded — enabled=%s roles=%d assignments=%d "
+            "auto_reminder=%s default_repeat=%dm default_ping=%dm",
+            self.enabled, len(self.roles), len(self.assignments),
+            self.auto_reminder_enabled, self.default_repeat, self.default_ping,
+        )
+
     def cog_unload(self) -> None:
         self.deadline_check_loop.cancel()
         self.reminder_loop.cancel()
+        cached = len(self._reminder_msg_cache)
+        self._reminder_msg_cache.clear()
+        logger.info("ticketallot: unloaded — cleared %d cached reminder message(s)", cached)
 
     async def _save(self) -> None:
         await self.db.find_one_and_update(
@@ -371,8 +416,16 @@ class TicketAllot(commands.Cog):
         role_cfg = self.roles.get(str(role_id), {})
         role     = self.bot.modmail_guild.get_role(role_id)
 
+        await self._delete_cached_reminder(cid, reason="new assignment")
+
         self.assignments[cid] = self._new_record(member.id, role_id, channel.name)
         await self._save()
+
+        logger.info(
+            "ticketallot: assigned channel %s (%s) to member %s via role %s%s",
+            cid, channel.name, member.id, role_id,
+            f" by {assigned_by.id}" if assigned_by else " (auto)",
+        )
 
         # ── Optional category move ────────────────────────────────────────────
         moved_category: Optional[discord.CategoryChannel] = None
@@ -386,8 +439,15 @@ class TicketAllot(commands.Cog):
                         reason="TicketAllot: moved to assignee category",
                     )
                     moved_category = cat
+                    logger.info(
+                        "ticketallot: moved channel %s to category %s for member %s",
+                        cid, cat.id, member.id,
+                    )
                 except discord.Forbidden:
-                    pass
+                    logger.warning(
+                        "ticketallot: missing permission to move channel %s to category %s",
+                        cid, cat.id,
+                    )
 
         # ── Build embed ───────────────────────────────────────────────────────
         deadline_h = role_cfg.get("deadline_hours", 0)
@@ -428,8 +488,10 @@ class TicketAllot(commands.Cog):
 
         try:
             await channel.send(content=member.mention, embed=embed)
-        except discord.HTTPException:
-            pass
+        except discord.HTTPException as e:
+            logger.warning(
+                "ticketallot: failed to send assignment embed in channel %s: %s", cid, e
+            )
 
     # ─── Listeners ────────────────────────────────────────────────────────────
 
@@ -461,13 +523,19 @@ class TicketAllot(commands.Cog):
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         """Auto-complete when a modmail thread channel is deleted."""
         cid = str(channel.id)
-        self._reminder_msg_cache.pop(cid, None)
+        if self._reminder_msg_cache.pop(cid, None) is not None:
+            logger.debug(
+                "ticketallot: dropped cached reminder for deleted channel %s", cid
+            )
         if cid in self.assignments and not self.assignments[cid].get("completed"):
             self.assignments[cid]["completed"]    = True
             self.assignments[cid]["completed_at"] = utcnow().isoformat()
             # Silence any ongoing reminder
             self.assignments[cid]["in_ping_mode"] = False
             await self._save()
+            logger.info(
+                "ticketallot: channel %s deleted — marked assignment complete", cid
+            )
 
     # ─── Background: Deadlines + Escalation ──────────────────────────────────
 
@@ -512,13 +580,31 @@ class TicketAllot(commands.Cog):
                     embed.set_footer(text="Automated deadline reminder")
                     try:
                         await channel.send(embed=embed)
-                    except discord.HTTPException:
-                        pass
+                        logger.info(
+                            "ticketallot: deadline reached for channel %s (member %s)",
+                            cid, a["member_id"],
+                        )
+                    except discord.HTTPException as e:
+                        logger.warning(
+                            "ticketallot: failed to send deadline embed for channel %s: %s",
+                            cid, e,
+                        )
+                else:
+                    logger.warning(
+                        "ticketallot: deadline reached for channel %s but channel/member "
+                        "missing (channel=%s, member=%s)",
+                        cid, bool(channel), bool(member),
+                    )
                 self.assignments[cid]["notified"] = True
                 changed = True
 
             # ── Escalation ────────────────────────────────────────────────────
             if esc_h and elapsed_h >= esc_h and not a.get("escalated"):
+                logger.info(
+                    "ticketallot: escalation triggered for channel %s (member %s, "
+                    "role %s, transfer=%s)",
+                    cid, a["member_id"], rid, cfg.get("transfer", False),
+                )
                 if cfg.get("transfer"):
                     # Transfer resets the record so future escalation can fire again
                     await self._handle_escalation_transfer(cid, a, now)
@@ -550,7 +636,10 @@ class TicketAllot(commands.Cog):
             return
 
         old_member = guild.get_member(a["member_id"])
+        old_member_id = a["member_id"]
         new_role   = guild.get_role(int(higher_rid))
+
+        await self._delete_cached_reminder(cid, reason="escalation transfer")
 
         # Mutate the existing record in-place (shared reference with self.assignments[cid])
         a["member_id"]        = new_member.id
@@ -560,6 +649,12 @@ class TicketAllot(commands.Cog):
         a["escalated"]        = False  # reset so it can escalate again under new role
         a["last_reminder_at"] = None
         a["in_ping_mode"]     = False
+
+        logger.info(
+            "ticketallot: escalation transfer — channel %s reassigned from member %s "
+            "(role %s) to member %s (role %s)",
+            cid, old_member_id, current_rid, new_member.id, higher_rid,
+        )
 
         embed = discord.Embed(
             title="🚨 Ticket Escalated & Transferred",
@@ -584,7 +679,11 @@ class TicketAllot(commands.Cog):
                     await channel.edit(category=category)
                     embed.add_field(name="Moved To", value=f"#{category.name}", inline=True)
                 except discord.Forbidden:
-                    pass
+                    logger.warning(
+                        "ticketallot: missing permission to move channel %s to category %s "
+                        "during transfer",
+                        cid, category.id,
+                    )
 
         old_role = guild.get_role(int(current_rid))
         embed.set_footer(
@@ -592,16 +691,25 @@ class TicketAllot(commands.Cog):
         )
         try:
             await channel.send(embed=embed)
-        except discord.HTTPException:
-            pass
+        except discord.HTTPException as e:
+            logger.warning(
+                "ticketallot: failed to send transfer embed for channel %s: %s", cid, e
+            )
 
     async def _post_escalation(
         self, cid: str, a: dict, now: datetime, elapsed_h: float
     ) -> None:
         if not self.alert_channel:
+            logger.debug(
+                "ticketallot: escalation for channel %s not posted — no alert channel configured",
+                cid,
+            )
             return
         alert_ch = self.bot.modmail_guild.get_channel(self.alert_channel)
         if not alert_ch:
+            logger.warning(
+                "ticketallot: configured alert channel %s not found", self.alert_channel
+            )
             return
 
         guild      = self.bot.modmail_guild
@@ -647,8 +755,11 @@ class TicketAllot(commands.Cog):
         embed.set_footer(text="Automated escalation alert")
         try:
             await alert_ch.send(content=role_mentions, embed=embed)
-        except discord.HTTPException:
-            pass
+            logger.info("ticketallot: posted escalation alert for channel %s", cid)
+        except discord.HTTPException as e:
+            logger.warning(
+                "ticketallot: failed to post escalation alert for channel %s: %s", cid, e
+            )
 
     # ─── Background: Reminders ────────────────────────────────────────────────
     #
@@ -701,9 +812,26 @@ class TicketAllot(commands.Cog):
             if elapsed_m < trigger_m:
                 continue
 
+            logger.debug(
+                "ticketallot: reminder due for channel %s (member=%s, in_ping=%s, "
+                "elapsed=%.1fm, trigger=%dm)",
+                cid, mid, in_ping, elapsed_m, trigger_m,
+            )
+
             # Fetch targets
             channel = self.bot.modmail_guild.get_channel(int(cid))
             member  = self.bot.modmail_guild.get_member(int(mid))
+
+            if not channel:
+                logger.warning(
+                    "ticketallot: reminder skipped — channel %s not found (deleted?)", cid
+                )
+            elif not member:
+                logger.warning(
+                    "ticketallot: reminder skipped — member %s not found in guild for channel %s",
+                    mid, cid,
+                )
+
             if channel and member:
                 assigned = ensure_utc(datetime.fromisoformat(a["assigned_at"]))
 
@@ -738,20 +866,19 @@ class TicketAllot(commands.Cog):
                     text=f"Repeat: {repeat_m}m • Ping interval: {ping_m}m"
                 )
 
-                old_msg = self._reminder_msg_cache.get(cid)
-                if old_msg is not None:
-                    try:
-                        await old_msg.delete()
-                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                        pass
-
-                    self._reminder_msg_cache.pop(cid, None)
+                await self._delete_cached_reminder(cid, reason="new reminder replacing old")
 
                 try:
                     sent = await channel.send(content=member.mention, embed=embed)
                     self._reminder_msg_cache[cid] = sent
-                except discord.HTTPException:
-                    pass
+                    logger.info(
+                        "ticketallot: sent %s reminder for channel %s to member %s (msg id %s)",
+                        "first" if not in_ping else "follow-up", cid, mid, sent.id,
+                    )
+                except discord.HTTPException as e:
+                    logger.warning(
+                        "ticketallot: failed to send reminder for channel %s: %s", cid, e
+                    )
 
             # Update state
             self.assignments[cid]["last_reminder_at"] = now.isoformat()
@@ -760,6 +887,20 @@ class TicketAllot(commands.Cog):
 
         if changed:
             await self._save()
+
+    @reminder_loop.error
+    async def reminder_loop_error(self, error: Exception) -> None:
+        logger.error("ticketallot: reminder_loop crashed: %s", error, exc_info=error)
+        if not self.reminder_loop.is_running():
+            logger.info("ticketallot: restarting reminder_loop after error")
+            self.reminder_loop.start()
+
+    @deadline_check_loop.error
+    async def deadline_check_loop_error(self, error: Exception) -> None:
+        logger.error("ticketallot: deadline_check_loop crashed: %s", error, exc_info=error)
+        if not self.deadline_check_loop.is_running():
+            logger.info("ticketallot: restarting deadline_check_loop after error")
+            self.deadline_check_loop.start()
 
     @reminder_loop.before_loop
     @deadline_check_loop.before_loop
@@ -979,7 +1120,8 @@ class TicketAllot(commands.Cog):
         ─────────────────────────────────────────────────
         **📂 Category Routing  (Mod)**
         ─────────────────────────────────────────────────
-        `{prefix}ta category [#category] [@member]`  Set / clear ticket category (Admin for others)
+        `{prefix}ta category [#category]`              Set / clear your own ticket category
+        `{prefix}ta categoryfor @member [#category]`   Admin: set / clear for another member
 
         ─────────────────────────────────────────────────
         **⏰ Reminders  (Admin config / Mod stop)**
@@ -1224,7 +1366,7 @@ class TicketAllot(commands.Cog):
     @ticketallot_.command(name="category", aliases=["cat"])
     async def ta_category(self, ctx, category: discord.CategoryChannel = None):
         """
-        Set or clear your ticket category.
+        Set or clear **your own** ticket category.
 
         When a ticket is assigned to you its channel is automatically moved
         into this category and the assignment embed shows where it was moved.
@@ -1257,28 +1399,32 @@ class TicketAllot(commands.Cog):
     @ticketallot_.command(name="categoryfor", aliases=["catfor"])
     async def ta_category_for(self, ctx, member: discord.Member, category: discord.CategoryChannel = None):
         """
-        Set or clear the ticket category for **another** staff member.
+        Admin: set or clear the ticket category for **another** staff member.
+
         Omit `category` to clear their setting.
+
         **Examples:**
         `{prefix}ta categoryfor @StaffMember "Senior Queue"`  — set category
         `{prefix}ta categoryfor @StaffMember`                  — clear category
         """
         mid = str(member.id)
+
         if category is None:
             if mid in self.member_categories:
                 del self.member_categories[mid]
                 await self._save()
-                return await ctx.send(f"✅ {member.mention} preferred ticket category has been cleared.")
+                return await ctx.send(
+                    f"✅ Ticket category for {member.mention} has been cleared."
+                )
             return await ctx.send(
-                f"ℹ️ {member.mention} doesn't seem to have a preferred ticket category set.\n"
-                f"Use `{ctx.prefix}ta category <category_name/category_id>` to set one."
+                f"ℹ️ {member.mention} doesn't have a ticket category set."
             )
 
         self.member_categories[mid] = category.id
         await self._save()
         await ctx.send(
-            f"✅ Tickets assigned to {member.mention} will now be moved to the "
-            f"**{category.name}** category."
+            f"✅ Tickets assigned to {member.mention} will be moved to "
+            f"**{category.name}**."
         )
 
     # ── reminder subgroup ──────────────────────────────────────────────────────
@@ -1363,9 +1509,16 @@ class TicketAllot(commands.Cog):
         was_pinging = self.assignments[cid].get("in_ping_mode", False)
         now         = utcnow()
 
+        await self._delete_cached_reminder(cid, reason="ta reminder stop")
+
         self.assignments[cid]["last_reminder_at"] = now.isoformat()
         self.assignments[cid]["in_ping_mode"]     = False
         await self._save()
+
+        logger.info(
+            "ticketallot: reminder stopped for channel %s by %s (was_pinging=%s)",
+            cid, ctx.author.id, was_pinging,
+        )
 
         # Determine which repeat interval applies
         mid     = str(self.assignments[cid]["member_id"])
@@ -1525,8 +1678,14 @@ class TicketAllot(commands.Cog):
         self.assignments[cid]["completed_at"]     = now.isoformat()
         self.assignments[cid]["in_ping_mode"]     = False  # silence reminders
         self.assignments[cid]["last_reminder_at"] = now.isoformat()
-        self._reminder_msg_cache.pop(cid, None)
         await self._save()
+
+        await self._delete_cached_reminder(cid, reason="ta complete")
+
+        logger.info(
+            "ticketallot: channel %s marked complete by %s (resolution=%.1fm)",
+            cid, ctx.author.id, (now - assigned).total_seconds() / 60,
+        )
 
         member = self.bot.modmail_guild.get_member(self.assignments[cid]["member_id"])
         embed  = discord.Embed(
