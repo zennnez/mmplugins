@@ -112,6 +112,9 @@ class TicketAllot(commands.Cog):
     #   "escalated":        bool,         ← escalation alert sent
     #   "last_reminder_at": ISO str | None,
     #   "in_ping_mode":     bool,         ← True = currently in spam phase
+    #   "last_reminder_msg_id": int | None,  ← id of the last reminder message sent,
+    #                                           persisted so it survives a bot/cog
+    #                                           restart and can still be deleted
     # }
 
     def __init__(self, bot):
@@ -152,13 +155,59 @@ class TicketAllot(commands.Cog):
 
     async def _delete_cached_reminder(self, cid: str, *, reason: str = "") -> None:
         """
-        Delete the cached reminder message for *cid* (if any) and remove it
-        from the cache. Safe to call even if nothing is cached.
+        Delete the previous reminder message for *cid* (if any) and remove it
+        from the cache.
+
+        The in-memory cache alone does not survive a bot/cog restart — it's
+        wiped on ``cog_unload`` and starts empty on ``cog_load`` — so a
+        restart between two reminders used to strand the old reminder
+        message forever (nothing was cached to delete, so the next reminder
+        was sent alongside it instead of replacing it). To fix that, the
+        message id is also persisted on the assignment record; if it's not
+        in the in-memory cache we fall back to fetching it by that id.
+        Safe to call even if nothing is tracked either way.
         """
         old_msg = self._reminder_msg_cache.pop(cid, None)
-        if old_msg is None:
-            logger.debug("ticketallot: no cached reminder message for %s (%s)", cid, reason)
+
+        record = self.assignments.get(cid)
+        persisted_id = record.get("last_reminder_msg_id") if record else None
+        if record is not None:
+            record["last_reminder_msg_id"] = None  # clear regardless of delete outcome
+
+        if old_msg is None and persisted_id is None:
+            logger.debug("ticketallot: no reminder message tracked for %s (%s)", cid, reason)
             return
+
+        if old_msg is None:
+            # Not cached (e.g. after a restart) — recover it via the persisted id.
+            channel = self.bot.modmail_guild.get_channel(int(cid)) if self.bot.modmail_guild else None
+            if channel is None:
+                logger.debug(
+                    "ticketallot: cannot delete stale reminder %s — channel %s not found (%s)",
+                    persisted_id, cid, reason,
+                )
+                return
+            try:
+                old_msg = await channel.fetch_message(persisted_id)
+            except discord.NotFound:
+                logger.debug(
+                    "ticketallot: reminder message %s in channel %s already deleted (%s)",
+                    persisted_id, cid, reason,
+                )
+                return
+            except discord.Forbidden:
+                logger.warning(
+                    "ticketallot: missing permission to fetch reminder message %s in channel %s (%s)",
+                    persisted_id, cid, reason,
+                )
+                return
+            except discord.HTTPException as e:
+                logger.warning(
+                    "ticketallot: failed to fetch reminder message %s in channel %s (%s): %s",
+                    persisted_id, cid, reason, e,
+                )
+                return
+
         try:
             await old_msg.delete()
             logger.info(
@@ -409,16 +458,17 @@ class TicketAllot(commands.Cog):
     def _new_record(member_id: int, role_id: int, channel_name: str) -> dict:
         now = utcnow().isoformat()
         return {
-            "member_id":        member_id,
-            "role_id":          role_id,
-            "assigned_at":      now,
-            "channel_name":     channel_name,
-            "completed":        False,
-            "completed_at":     None,
-            "notified":         False,
-            "escalated":        False,
-            "last_reminder_at": None,
-            "in_ping_mode":     False,
+            "member_id":            member_id,
+            "role_id":              role_id,
+            "assigned_at":          now,
+            "channel_name":         channel_name,
+            "completed":            False,
+            "completed_at":         None,
+            "notified":             False,
+            "escalated":            False,
+            "last_reminder_at":     None,
+            "in_ping_mode":         False,
+            "last_reminder_msg_id": None,
         }
 
     # ─── Shared assignment + channel-move logic ───────────────────────────────
@@ -895,6 +945,7 @@ class TicketAllot(commands.Cog):
                 try:
                     sent = await channel.send(content=member.mention, embed=embed)
                     self._reminder_msg_cache[cid] = sent
+                    self.assignments[cid]["last_reminder_msg_id"] = sent.id
                     logger.info(
                         "ticketallot: sent %s reminder for channel %s to member %s (msg id %s)",
                         "first" if not in_ping else "follow-up", cid, mid, sent.id,
