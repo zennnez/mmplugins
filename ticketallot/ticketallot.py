@@ -7,6 +7,7 @@
 #  ta toggle                                         — Enable / disable
 #  ta alertchannel #ch                               — Set escalation alert channel
 #  ta maxpending [n]                                 — View / set max pending per staff
+#  ta period [all|week|month]                        — Which assignments count for the ratio
 #  ta statschannel [#ch]                             — Set / clear auto-updating stats embed
 #  ta reset                                          — Wipe all assignment records
 #
@@ -15,6 +16,7 @@
 #  ta role view
 #  ta role deadline @R <time>
 #  ta role escalation @R <time> [transfer]
+#  ta role maxpending @R [n|default]
 #
 #  ta category [#category]      — Set / clear your personal ticket category
 #
@@ -84,6 +86,10 @@ class TicketAllot(commands.Cog):
     arrives the plugin picks the role whose share would be *least* over-represented
     and the member inside that role with the fewest open tickets.
 
+    **Allotment period** — the ratio is computed over assignments made in the
+    current period (``ta period``: all / ISO week / calendar month, UTC) so
+    old history doesn't swamp new staff.
+
     **Category routing** — each staff member can register a Discord category;
     tickets assigned to them are moved there automatically.
 
@@ -144,6 +150,9 @@ class TicketAllot(commands.Cog):
         # Max open (pending) tickets a staff member may hold before being
         # skipped for new auto-assignments. 0 = unlimited.
         self.max_pending: int = 0
+
+        # Which assignments count towards the ratio: "all" | "week" | "month".
+        self.alloc_period: str = "all"
 
         # Channel + message id for the auto-updating stats embed.
         self.stats_channel: Optional[int] = None
@@ -244,6 +253,7 @@ class TicketAllot(commands.Cog):
             "default_repeat":       120,
             "default_ping":         1,
             "max_pending":          0,
+            "alloc_period":         "all",
             "stats_channel":        None,
             "stats_message_id":     None,
         }
@@ -268,6 +278,7 @@ class TicketAllot(commands.Cog):
         self.default_repeat        = self.config.get("default_repeat", 120)
         self.default_ping          = self.config.get("default_ping", 1)
         self.max_pending           = self.config.get("max_pending", 0)
+        self.alloc_period          = self.config.get("alloc_period", "all")
         self.stats_channel         = self.config.get("stats_channel")
         self.stats_message_id      = self.config.get("stats_message_id")
 
@@ -305,6 +316,7 @@ class TicketAllot(commands.Cog):
                     "default_repeat":        self.default_repeat,
                     "default_ping":          self.default_ping,
                     "max_pending":           self.max_pending,
+                    "alloc_period":          self.alloc_period,
                     "stats_channel":         self.stats_channel,
                     "stats_message_id":      self.stats_message_id,
                 }
@@ -328,8 +340,42 @@ class TicketAllot(commands.Cog):
     def _member_open_count(self, member_id: int) -> int:
         return sum(1 for a in self._open_assignments() if a["member_id"] == member_id)
 
-    def _member_total_count(self, member_id: int) -> int:
-        return sum(1 for a in self.assignments.values() if a["member_id"] == member_id)
+    def _period_bounds(self) -> Optional[Tuple[str, str]]:
+        """
+        Inclusive (first, last) ``YYYY-MM-DD`` of the current allotment period
+        (UTC), or None for all-time.  ``assigned_at`` is always stored as a UTC
+        ISO string, so its first 10 chars compare correctly as plain strings.
+        """
+        today = utcnow().date()
+        if self.alloc_period == "week":  # ISO week: Monday–Sunday
+            first = today - timedelta(days=today.weekday())
+            return first.isoformat(), (first + timedelta(days=6)).isoformat()
+        if self.alloc_period == "month":
+            # "-31" is only a string upper bound; no date sorts between day 30 and it
+            return f"{today:%Y-%m}-01", f"{today:%Y-%m}-31"
+        return None
+
+    def _period_label(self) -> str:
+        today = utcnow().date()
+        if self.alloc_period == "week":
+            y, w, _ = today.isocalendar()
+            return f"{y}-W{w:02d}"
+        if self.alloc_period == "month":
+            return f"{today:%Y-%m}"
+        return "all-time"
+
+    def _period_assignments(self) -> List[dict]:
+        """Assignments inside the current allotment period (everything if 'all')."""
+        b = self._period_bounds()
+        if b is None:
+            return list(self.assignments.values())
+        return [a for a in self.assignments.values() if b[0] <= a["assigned_at"][:10] <= b[1]]
+
+    def _member_total_count(self, member_id: int, *, all_time: bool = False) -> int:
+        # ponytail: O(n) string-compare scan per call (fine for tens of thousands
+        # of records); upgrade path is one Counter per picker/embed call.
+        src = self.assignments.values() if all_time else self._period_assignments()
+        return sum(1 for a in src if a["member_id"] == member_id)
 
     def _pick_role(self) -> Optional[str]:
         """
@@ -373,7 +419,7 @@ class TicketAllot(commands.Cog):
         Pick the member with the fewest total tickets assigned to them; ties broken by fewest currently open tickets.
         """
 
-        total_after = len(self.assignments) + 1
+        total_after = len(self._period_assignments()) + 1
         candidates = []
 
         for rid, cfg in self.roles.items():
@@ -387,10 +433,11 @@ class TicketAllot(commands.Cog):
 
             role_ratio = cfg.get("ratio", 0)
             member_share = role_ratio / len(members)
+            limit = cfg.get("max_pending", self.max_pending)  # per-role override, else global
 
             for member in members:
                 open_count = self._member_open_count(member.id)
-                if self.max_pending and open_count >= self.max_pending:
+                if limit and open_count >= limit:
                     continue  # at capacity — skip for new auto-assignment
 
                 total_count = self._member_total_count(member.id)
@@ -999,15 +1046,18 @@ class TicketAllot(commands.Cog):
             embed.description = "No staff members found in configured roles."
         else:
             members = sorted(staff.values(), key=lambda m: -self._member_open_count(m.id))
+            label = self._period_label()
+            show_all = self.alloc_period != "all"
             lines = [
                 f"**{m.display_name}** — Open: `{self._member_open_count(m.id)}` "
-                f"| Total: `{self._member_total_count(m.id)}`"
+                f"| {label}: `{self._member_total_count(m.id)}`"
+                + (f" | All-time: `{self._member_total_count(m.id, all_time=True)}`" if show_all else "")
                 for m in members
             ]
-            # ponytail: one field per 15 lines to stay under Discord's 1024-char
+            # ponytail: one field per 10 lines to stay under Discord's 1024-char
             # field limit; a team large enough to hit the 25-field embed cap
             # should use `ta dashboard` instead of this at-a-glance view.
-            for i, chunk in enumerate(chunks(lines, 15)):
+            for i, chunk in enumerate(chunks(lines, 10)):
                 embed.add_field(name="Staff" if i == 0 else "\u200b", value="\n".join(chunk), inline=False)
 
         embed.set_footer(text="Use `ta dashboard` for detailed breakdowns • Refreshes every 5m")
@@ -1075,7 +1125,7 @@ class TicketAllot(commands.Cog):
 
         # ── Page 0: Role summary (skipped when filtering by member) ───────────
         if not target_member:
-            total_all = len(self.assignments)
+            total_all = len(self._period_assignments())
             role_counts = self._role_open_counts()
 
             re = discord.Embed(
@@ -1083,7 +1133,10 @@ class TicketAllot(commands.Cog):
                 color=color,
                 timestamp=now,
             )
-            re.description = f"Total Allotments tracked: **{total_all}**"
+            re.description = (
+                f"Allotments in period (**{self._period_label()}**): **{total_all}** "
+                f"| All-time: **{len(self.assignments)}**"
+            )
 
             for rid, cfg in self.roles.items():
                 role = guild.get_role(int(rid))
@@ -1261,6 +1314,7 @@ class TicketAllot(commands.Cog):
         `{prefix}ta toggle`                   Enable / disable auto-assign
         `{prefix}ta alertchannel #channel`    Set escalation alert channel
         `{prefix}ta maxpending [n]`           View / set max pending per staff (0=unlimited)
+        `{prefix}ta period [all|week|month]`  Which assignments count for the ratio (UTC)
         `{prefix}ta statschannel [#channel]`  Set / clear auto-updating stats embed channel
         `{prefix}ta status`                   Live status summary
         `{prefix}ta reset`                    ⚠️ Wipe all assignment records
@@ -1273,6 +1327,7 @@ class TicketAllot(commands.Cog):
         `{prefix}ta role view`
         `{prefix}ta role deadline @R <time>`
         `{prefix}ta role escalation @R <time> [transfer]`
+        `{prefix}ta role maxpending @R [n|default]`
 
         ─────────────────────────────────────────────────
         **📂 Category Routing  (Mod)**
@@ -1368,6 +1423,7 @@ class TicketAllot(commands.Cog):
             )
 
         self.roles[str(role.id)] = {
+            **self.roles.get(str(role.id), {}),  # keep per-role extras (max_pending)
             "ratio":            ratio,
             "deadline_hours":   dl_sec  / 3600,
             "escalation_hours": esc_sec / 3600,
@@ -1429,6 +1485,8 @@ class TicketAllot(commands.Cog):
             esc_h   = cfg.get("escalation_hours", 0)
             dl_str  = human_timedelta(now + timedelta(hours=dl_h),  source=now, suffix=False) if dl_h  else "—"
             esc_str = human_timedelta(now + timedelta(hours=esc_h), source=now, suffix=False) if esc_h else "—"
+            mp      = cfg.get("max_pending")
+            mp_str  = f"global ({self.max_pending or 'unlimited'})" if mp is None else (mp or "unlimited")
             embed.add_field(
                 name=role.name if role else f"Unknown ({rid})",
                 value=(
@@ -1436,6 +1494,7 @@ class TicketAllot(commands.Cog):
                     f"Deadline: **{dl_str}**\n"
                     f"Escalation: **{esc_str}**\n"
                     f"Transfer: **{'Yes' if cfg.get('transfer') else 'No'}**\n"
+                    f"Max pending: **{mp_str}**\n"
                     f"Members: **{members}**"
                 ),
                 inline=True,
@@ -1516,6 +1575,37 @@ class TicketAllot(commands.Cog):
             f"**{human_timedelta(escalation.dt, source=now, suffix=False)}**, "
             f"transfer **{'enabled' if transfer else 'disabled'}**."
         )
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ta_role.command(name="maxpending", aliases=["maxp"])
+    async def ta_role_maxpending(self, ctx, role: discord.Role, limit: str = None):
+        """
+        View or set the max open tickets per member for one role.
+
+        Overrides the global `{prefix}ta maxpending` for this role.  `0` means
+        unlimited for the role; `default` removes the override.
+
+        **Examples:**
+        `{prefix}ta role maxpending @Senior-Support 5`
+        `{prefix}ta role maxpending @Senior-Support default`
+        """
+        rid = str(role.id)
+        if rid not in self.roles:
+            return await ctx.send(f"❌ {role.mention} is not configured.")
+
+        cur = self.roles[rid].get("max_pending")
+        if limit is None:
+            value = f"global ({self.max_pending or 'unlimited'})" if cur is None else (cur or "unlimited")
+            return await ctx.send(f"📋 Max pending for {role.mention}: **{value}**")
+
+        if limit.lower() == "default":
+            self.roles[rid].pop("max_pending", None)
+        elif limit.isdigit():
+            self.roles[rid]["max_pending"] = int(limit)
+        else:
+            return await ctx.send("❌ Limit must be a number (`0` = unlimited) or `default`.")
+        await self._save()
+        await ctx.send(f"✅ Max pending for {role.mention} updated.")
 
     # ── category ──────────────────────────────────────────────────────────────
 
@@ -1919,7 +2009,7 @@ class TicketAllot(commands.Cog):
         Shows expected share, actual total, and 'deficit' (how many tickets
         behind/ahead a member is relative to their target).
         """
-        total_all = len(self.assignments)
+        total_all = len(self._period_assignments())
         guild = self.bot.modmail_guild
         color = self.bot.main_color
 
@@ -1956,6 +2046,7 @@ class TicketAllot(commands.Cog):
                 member_stats.append({
                     "name": m.display_name,
                     "total": m_total,
+                    "all": self._member_total_count(m.id, all_time=True),
                     "open": m_open,
                     "deficit": deficit,
                     "expected": expected_total
@@ -1989,6 +2080,7 @@ class TicketAllot(commands.Cog):
                 timestamp=utcnow()
             )
             embed.description = (
+                f"**Period:** {self._period_label()}\n"
                 f"**Target Share:** {r['target']}% | **Actual Share:** {actual_pct:.1f}%\n"
                 f"**Expected Total:** {r['expected']:.1f} | **Actual Total:** {r['actual']} {status}\n"
                 f"**Next in line:** {r['members'][0]['name']} (Deficit: {r['members'][0]['deficit']:.2f})"
@@ -2011,7 +2103,7 @@ class TicketAllot(commands.Cog):
                     # Deficit formatting: + means they are behind (deficit), - means they are ahead (surplus)
                     def_str = f"+{m['deficit']:.2f}" if m['deficit'] >= 0 else f"{m['deficit']:.2f}"
                     mlines.append(
-                        f"• **{m['name']}**: {m['total']} total ({m['open']} open) | Deficit: `{def_str}`"
+                        f"• **{m['name']}**: {m['total']} in period / {m['all']} all-time ({m['open']} open) | Deficit: `{def_str}`"
                     )
                 embed.add_field(name="Member Deficit Analysis", value="\n".join(mlines), inline=False)
             
@@ -2049,6 +2141,11 @@ class TicketAllot(commands.Cog):
         embed.add_field(
             name="Assignments",
             value=f"Open: **{len(self._open_assignments())}** | Total: **{len(self.assignments)}**",
+            inline=True,
+        )
+        embed.add_field(
+            name="Allotment Period",
+            value=f"**{self._period_label()}** | In period: **{len(self._period_assignments())}**",
             inline=True,
         )
         embed.add_field(
@@ -2145,6 +2242,34 @@ class TicketAllot(commands.Cog):
         await self._save()
         value = f"**{limit}**" if limit else "Unlimited"
         await ctx.send(f"✅ Max pending per staff set to {value}.")
+
+    @checks.has_permissions(PermissionLevel.ADMIN)
+    @ticketallot_.command(name="period")
+    async def ta_period(self, ctx, period: str = None):
+        """
+        View or set which assignments count towards the allotment ratio.
+
+        `all` = every assignment ever, `week` = current ISO week (Mon–Sun, UTC),
+        `month` = current calendar month (UTC).  Only the picker and the
+        distribution views change — nothing is deleted, and all-time counts stay
+        visible in `{prefix}ta rolecheck` and the stats embed.
+
+        **Examples:**
+        `{prefix}ta period month`
+        `{prefix}ta period`
+        """
+        if period is None:
+            return await ctx.send(
+                f"📅 Allotment period: **{self.alloc_period}** ({self._period_label()})."
+            )
+        period = period.lower()
+        if period not in ("all", "week", "month"):
+            return await ctx.send("❌ Choose `all`, `week` or `month`.")
+        self.alloc_period = period
+        await self._save()
+        await ctx.send(
+            f"✅ Allotment now based on **{period}** ({self._period_label()}). History is kept."
+        )
 
     @checks.has_permissions(PermissionLevel.ADMIN)
     @ticketallot_.command(name="statschannel", aliases=["statsch"])
